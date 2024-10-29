@@ -3,11 +3,15 @@ import java.sql.*;
 import java.util.Map;
 import java.io.File;
 
-///TO DO
+/// TODO:
 ///
-/// edit login and menus before implimenting functions
+/// addITem applciation closes on window close, currently have set to system exit on close but
+/// would like it to just return to old window and remove back button
 ///
-
+/// Add hashing and salting to password
+///
+///
+///
 public class Login {
 
     /**
@@ -16,7 +20,7 @@ public class Login {
 
     public static void main(String[] args) {
         String userDatabasePath = "database/userDatabase.db";
-        String loginsDatabasePath = "database/loginsDatabase.db"; // Path for the logins database
+        String loginsDatabasePath = "database/loginsDatabase.db";
 
         try (Connection userConnection = DriverManager.getConnection("jdbc:sqlite:" + userDatabasePath);
              Connection loginsConnection = DriverManager.getConnection("jdbc:sqlite:" + loginsDatabasePath)) {
@@ -33,27 +37,32 @@ public class Login {
                 String password = loginData.get("password");
 
                 try {
-                    // Check credentials
+
+                    //Checks to see if a match is found, if there is then checks for their admin level
                     if (checkCredentials(userConnection, username, password)) {
-                        isAdmin = checkAdminRights(userConnection, username); // Set the admin status based on check
-                        JOptionPane.showMessageDialog(null, "Welcome Back " + username);
+                        isAdmin = checkAdminRights(userConnection, username);
+                        JOptionPane.showMessageDialog(null, "Welcome " + username);
 
-                        // Clear sensitive information
-                        password = null; // Clear password variable
-                        loginData.remove("password"); // Remove password from the Map
-                        loginLoop = false; // Exit loop after successful login
-
-                        // Update last login in user database
+                        // Update relevant databases and create user object, parse user through application to postLogin
                         updateLastLogin(userConnection, username);
-
-                        // Update Name and Time in logins database
                         updateLoginHistory(loginsConnection, username);
-
                         databaseCheck();
+                        User user = new User(username, isAdmin, password);
 
-                        User user = new User(username, isAdmin);
+                        // Clear passwords from map and null value the string to be removed in rubbish removal
+                        // purely to get password storage out of memory
+                        password = null;
+                        loginData.remove("password");
+                        loginLoop = false;
 
-                        // Go to main menu with user object, Login.java ends here
+                        boolean firstLogin = firstLogin(userConnection, username);
+
+                        if (firstLogin) {
+                            JOptionPane.showMessageDialog(null, "Password update is required");
+                            menuFunctions resetPassword = new menuFunctions();
+                            resetPassword.resetPassword(user);
+                        }
+
                         postLogin.mainMenu(user);
 
                     } else {
@@ -114,8 +123,34 @@ public class Login {
             ResultSet results = preparedStatement.executeQuery();
 
             if (results.next()) {
-                int adminRights = results.getInt("admin_rights"); // Assuming 'admin_rights' is stored as an integer (0 or 1)
-                return adminRights == 1; // Return true if user has admin rights
+                //admin rights are stored as 0 and 1 in the database. 1 = yes, 0 = no. Returns true or false on expression.
+                int adminRights = results.getInt("admin_rights");
+                return adminRights == 1;
+            } else {
+                return false;
+            }
+        }
+    }
+
+
+    /**
+     * Method to check if the user has admin rights.
+     *
+     * @param connection The connection to the user database.
+     * @param username   The username of the user.
+     * @return True if the user is on first login, false otherwise.
+     * @throws SQLException If an SQL error occurs while checking first login integer.
+     */
+    private static boolean firstLogin(Connection connection, String username) throws SQLException {
+        String sql = "SELECT first_login FROM users WHERE username = ?";
+        try (PreparedStatement preparedStatement = connection.prepareStatement(sql)) {
+            preparedStatement.setString(1, username);
+            ResultSet results = preparedStatement.executeQuery();
+
+            if (results.next()) {
+                //first login is stored as 0 and 1 in the database. 1 = yes, 0 = no. Returns true or false on expression.
+                int firstLogin = results.getInt("first_login");
+                return firstLogin == 1;
             } else {
                 return false;
             }
@@ -128,6 +163,7 @@ public class Login {
      * @param connection The connection to the user database.
      * @param username   The username of the user whose last login time is to be updated.
      * @throws SQLException If an SQL error occurs while updating the last login time.
+     *
      */
     private static void updateLastLogin(Connection connection, String username) throws SQLException {
         dateTime formattedDateTimeInstance = new dateTime();
@@ -153,30 +189,48 @@ public class Login {
         dateTime formattedDateTimeInstance = new dateTime();
         String formattedDateTime = formattedDateTimeInstance.formattedDateTime();
 
-        String updateLoginsSql = "INSERT INTO Logins (Name, Time) VALUES (?, ?)"; // Assuming a table 'Logins'
+        String updateLoginsSql = "INSERT INTO Logins (Name, Time) VALUES (?, ?)";
         try (PreparedStatement preparedStatement = loginsConnection.prepareStatement(updateLoginsSql)) {
-            preparedStatement.setString(1, username);  // Insert the username into the Name column
-            preparedStatement.setString(2, formattedDateTime); // Insert the formatted DateTime into the Time column
+            preparedStatement.setString(1, username);
+            preparedStatement.setString(2, formattedDateTime);
             preparedStatement.executeUpdate();
         }
     }
 
+    /**
+     * Checks if any of the required database files are missing.
+     * If one or more database files (itemDatabase, movements, pendingOrdersDatabase, salesDatabase)
+     * do not exist, a confirmation dialog is displayed to the user.
+     *
+     * The dialog informs the user that:
+     * - If this is the first time using the program or if a file has been removed,
+     *   all missing files will be recreated.
+     * - If the user has not removed the files and this is not the first login,
+     *   they should restore the database files from a backup.
+     *
+     * The user is given two options:
+     * - "Create Files": If selected, the program will proceed to create the missing database files.
+     * - "Cancel": If selected, the program will terminate.
+     *
+     * Note: This check helps ensure that the necessary database structure is present
+     * for the application to function correctly.
+     */
+
     private static void databaseCheck() {
-        // Booleans to store the existence of each database
+
         boolean itemDatabaseExists = false;
         boolean movementsExists = false;
         boolean pendingOrdersDatabaseExists = false;
         boolean salesDatabaseExists = false;
 
-        // Define the paths to each file in the database folder
-        String databaseFolderPath = "database/";
 
+        String databaseFolderPath = "database/";
         File itemDatabaseFile = new File(databaseFolderPath, "itemDatabase.db");
         File movementsFile = new File(databaseFolderPath, "movements.db");
         File pendingOrdersDatabaseFile = new File(databaseFolderPath, "pendingOrdersDatabase.db");
         File salesDatabaseFile = new File(databaseFolderPath, "salesDatabase.db");
 
-        // Update booleans based on file existence
+        // Updates booleans if database is found so program knows which to make and which exist.
         itemDatabaseExists = itemDatabaseFile.exists();
         movementsExists = movementsFile.exists();
         pendingOrdersDatabaseExists = pendingOrdersDatabaseFile.exists();
@@ -190,9 +244,9 @@ public class Login {
                     "Missing Database Files",
                     JOptionPane.DEFAULT_OPTION,
                     JOptionPane.WARNING_MESSAGE,
-                    null, // Icon
-                    options, // Custom options
-                    options[0]); // Default option
+                    null,
+                    options,
+                    options[0]);
 
             if (option == 1) {
                 System.exit(0);
@@ -200,6 +254,7 @@ public class Login {
 
             if (option == 0) {
 
+                //Creates missing databases with set table and columns.
                 if (!itemDatabaseExists) {
                     String url = "jdbc:sqlite:" + databaseFolderPath + "/itemDatabase.db";
                     String createTableSQL = """
