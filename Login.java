@@ -3,14 +3,16 @@ import java.sql.*;
 import java.util.Map;
 import java.io.File;
 
-/// TODO:
+/// TODO along the way:
 ///
 /// addITem applciation closes on window close, currently have set to system exit on close but
 /// would like it to just return to old window and remove back button
 ///
 /// Add hashing and salting to password
+/// add "Docked" column to item database,
+// process will go Create Order - Recieve order (move to dock) - putaway (move to available stock)
 ///
-///
+///Converge all databases into one (excluding login and user)
 ///
 public class Login {
 
