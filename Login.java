@@ -11,7 +11,6 @@ import java.sql.*;
 /**
  * Main method that handles the login process and updates the login history.
  */
-
 public static void main(String[] args) {
     String userDatabasePath = "database/userDatabase.db";
     String loginsDatabasePath = "database/loginsDatabase.db";
@@ -77,6 +76,7 @@ public static void main(String[] args) {
     }
 }
 
+
 /**
  * Method to check the user's credentials against the database.
  *
@@ -100,6 +100,7 @@ private static boolean checkCredentials(Connection connection, String username, 
         }
     }
 }
+
 
 /**
  * Method to check if the user has admin rights.
@@ -150,6 +151,7 @@ private static boolean firstLogin(Connection connection, String username) throws
     }
 }
 
+
 /**
  * Method to update the last login time for the user in the user database.
  *
@@ -169,6 +171,7 @@ private static void updateLastLogin(Connection connection, String username) thro
         preparedStatement.executeUpdate();
     }
 }
+
 
 /**
  * Method to update the login history by adding the user's username and login time
@@ -190,12 +193,12 @@ private static void updateLoginHistory(Connection loginsConnection, String usern
     }
 }
 
+
 /**
  * Creates the database file and all necessary tables if they do not exist.
  * This method opens a connection to the database, executes SQL statements to create each table,
  * and then closes the connection.
  */
-
 private static void databaseCheck() {
 
     String databaseFolderPath = "database/";

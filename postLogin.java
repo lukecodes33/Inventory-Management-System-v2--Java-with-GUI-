@@ -33,11 +33,24 @@ public class postLogin {
                         break;
 
                     case 3:
+
+                        menuFunctions newPurchaseOrder = new menuFunctions();
+                        newPurchaseOrder.newPurchaseOrder(user, connection);
+                        break;
+
+                    case 4:
+
+                        menuFunctions showPendingOrders = new menuFunctions();
+                        showPendingOrders.displayPendingOrders(connection);
+                        break;
+
+
+                    case 13:
                         menuFunctions passwordReset = new menuFunctions();
                         passwordReset.resetPassword(user);
                         break;
 
-                    case 4:
+                    case 14:
                         JOptionPane.showMessageDialog(null, "Goodbye " + user.getUsername());
                         System.exit(0);
                         connection.close();
@@ -72,6 +85,16 @@ public class postLogin {
         String[] options = {
                 "Add Item",
                 "Search Items",
+                "Create Purchase Order",
+                "View Pending Orders",
+                "Receive Order",
+                "Put-away Stock",
+                "Low Stock Check",
+                "Change Re Order Triggers",
+                "Write Off Stock",
+                "Process Sale",
+                "View Transaction",
+                "Return Item",
                 "Reset Password",
                 "Log Out"
         };

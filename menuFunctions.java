@@ -10,8 +10,10 @@ import java.sql.*;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.UUID;
 
 public class menuFunctions {
+
 
     /**
      * Checks to ensure user has admin access.
@@ -265,8 +267,6 @@ public class menuFunctions {
      * @throws RuntimeException if a database access error occurs
      * while connecting to the SQLite database or executing the query.
      */
-
-
     public void viewAllItems(Connection connection) throws SQLException {
 
         JDialog dialog = new JDialog((JFrame) null, "Inventory Items", true);
@@ -338,7 +338,6 @@ public class menuFunctions {
      * @param user The User object representing the user whose password is to be reset.
      * @throws RuntimeException If an SQL error occurs during the password update process.
      */
-
     public void resetPassword(User user) {
         final boolean[][] passwordLoopBreaker = {{false}};
         final int[] attempts = {3};
@@ -451,6 +450,243 @@ public class menuFunctions {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+
+    /**
+     * Creates a new purchase order with specified items and quantities, and updates the relevant database tables.
+     *
+     * <p>This method performs the following actions:</p>
+     * <ul>
+     *     <li>Prompts the user for a reference number, generating a random reference if left blank.</li>
+     *     <li>Iterates through item entries, verifying each item exists in the inventory before adding it to the order.</li>
+     *     <li>Prompts the user for quantity per item and validates the input.</li>
+     *     <li>Stores each item and quantity in a map for further processing.</li>
+     *     <li>Inserts each item and its details into the pendingOrders table with a reference number, user, and date.</li>
+     *     <li>Updates the On Order quantity in the inventory table for each item.</li>
+     *     <li>Logs each item addition in the movements table, marking it as "ORDERED" with the user's details and date.</li>
+     * </ul>
+     *
+     * <p>The following columns are updated in each table:</p>
+     * <ul>
+     *     <li><b>pendingOrders:</b> Item Code, Amount, Reference, User, Date</li>
+     *     <li><b>inventory:</b> On Order (incremented by specified amount)</li>
+     *     <li><b>movements:</b> Item Code, Amount, Type ("ORDERED"), User, Date</li>
+     * </ul>
+     *
+     * <p>The method also checks for user permissions, restricting access to users without admin rights.</p>
+     *
+     * <p><b>Note:</b> This method expects an active database connection and a user object with username and admin rights details.</p>
+     *
+     * @param user      the User object representing the current user, including their admin rights
+     * @param connection the active Connection object to the database for executing SQL operations
+     * @throws RuntimeException if a database access error occurs while checking items or executing SQL queries
+     */
+    public void newPurchaseOrder(User user, Connection connection) {
+
+        dateTime formattedDateTimeInstance = new dateTime();
+        String formattedDateTime = formattedDateTimeInstance.formattedDateTime();
+
+        boolean adminRights = user.hasAdminRights();
+
+        if(adminRights) {
+            String referenceNumber = JOptionPane.showInputDialog("Please enter your reference number (Leave this blank if you want like a random generated number):");
+
+            if (referenceNumber == null) {
+                return;
+            }
+
+            if (referenceNumber.trim().isEmpty()) {
+                referenceNumber = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+                JOptionPane.showMessageDialog(null, "No reference number provided. Generated Reference Number: " + referenceNumber);
+            }
+
+            HashMap<String, Integer> purchaseOrderItems = new HashMap<>();
+
+            while (true) {
+                boolean exists = true;
+
+                String itemCode = JOptionPane.showInputDialog("Enter the item code:");
+
+                if (itemCode == null) {
+                    break;
+                }
+
+                String query = "SELECT COUNT(*) AS count FROM inventory WHERE `Item Code` = ?";
+                try (PreparedStatement checkForDuplicate = connection.prepareStatement(query)) {
+                    checkForDuplicate.setString(1, itemCode);
+                    ResultSet rs = checkForDuplicate.executeQuery();
+
+                    try {
+                        if (rs.next()) {
+                            int count = rs.getInt("count");
+                            if (count == 0) {
+                                JOptionPane.showMessageDialog(null, "Item Code does not exist in system, add it before adding to purchase order (CAPS SENSITIVE)", "Item not found", JOptionPane.WARNING_MESSAGE);
+                                exists = false;
+                            }
+                        }
+                    } catch (SQLException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                } catch (SQLException ex) {
+                    throw new RuntimeException(ex);
+                }
+
+                if (exists) {
+                    // Prompt for quantity
+                    String quantityStr = JOptionPane.showInputDialog("Enter the quantity:");
+                    if (quantityStr == null) {
+                        break;
+                    }
+
+                    int quantity;
+                    try {
+                        quantity = Integer.parseInt(quantityStr);
+                        if (quantity <= 0) {
+                            JOptionPane.showMessageDialog(null, "Please enter a valid positive quantity.");
+                            continue;
+                        }
+                    } catch (NumberFormatException e) {
+                        JOptionPane.showMessageDialog(null, "Invalid quantity. Please enter a number.");
+                        continue;
+                    }
+
+                    // Add item and quantity to the map
+                    purchaseOrderItems.put(itemCode, quantity);
+
+
+                    // Ask if the user wants to add another item
+                    int response = JOptionPane.showConfirmDialog(null, "Would you like to add another item?", "Add Another Item", JOptionPane.YES_NO_OPTION);
+                    if (response == JOptionPane.NO_OPTION) {
+                        break;
+                    }
+                }
+            }
+
+
+            for (String itemCode : purchaseOrderItems.keySet()) {
+                int amount = purchaseOrderItems.get(itemCode);
+
+                try {
+                    String insertPendingOrderQuery = "INSERT INTO pendingOrders (`Item Code`, `Amount`, `Reference`, `User`, `Date`) VALUES (?, ?, ?, ?, ?)";
+                    try (PreparedStatement insertPendingOrderStmt = connection.prepareStatement(insertPendingOrderQuery)) {
+                        insertPendingOrderStmt.setString(1, itemCode);
+                        insertPendingOrderStmt.setInt(2, amount);
+                        insertPendingOrderStmt.setString(3, referenceNumber);
+                        insertPendingOrderStmt.setString(4, user.getUsername());
+                        insertPendingOrderStmt.setString(5, formattedDateTime);
+                        insertPendingOrderStmt.executeUpdate();
+                    }
+
+                    String updateInventoryQuery = "UPDATE inventory SET `On Order` = `On Order` + ? WHERE `Item Code` = ?";
+                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateInventoryQuery)) {
+                        updateInventoryStmt.setInt(1, amount);
+                        updateInventoryStmt.setString(2, itemCode);
+                        updateInventoryStmt.executeUpdate();
+                    }
+
+                    String insertMovementQuery = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) VALUES (?, ?, ?, ?, ?)";
+                    try (PreparedStatement insertMovementStmt = connection.prepareStatement(insertMovementQuery)) {
+                        insertMovementStmt.setString(1, itemCode);
+                        insertMovementStmt.setInt(2, amount);
+                        insertMovementStmt.setString(3, "ORDERED");
+                        insertMovementStmt.setString(4, user.getUsername());
+                        insertMovementStmt.setString(5, formattedDateTime);
+                        insertMovementStmt.executeUpdate();
+                    }
+
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(null, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
+
+            JOptionPane.showMessageDialog(null, "Purchase order created successfully with reference number: " + referenceNumber);
+
+
+        } else {
+            JOptionPane.showMessageDialog(null, "You do not have access to this feature");
+        }
+
+    }
+
+
+    /**
+     * Displays all items in the pendingOrders table in a modal dialog.
+     * The dialog contains a table showing the item details and provides
+     * text fields for filtering the displayed items based on the selected columns.
+     *
+     * <p>This method connects to an SQLite database to retrieve item
+     * information and populates a JTable with the retrieved data.</p>
+     *
+     * <p>The following columns are displayed in the table:</p>
+     * <ul>
+     *     <li>Item Code/li>
+     *     <li>Amount</li>
+     *     <li>Reference</li>
+     *     <li>Date</li>
+     * </ul>
+     *
+     * <p>The method also implements filtering capabilities using text fields
+     * below the table. Users can filter the rows based on their input,
+     * which is case insensitive.</p>
+     *
+     * @throws RuntimeException if a database access error occurs
+     * while connecting to the SQLite database or executing the query.
+     */
+    public void displayPendingOrders(Connection connection) throws SQLException {
+
+        JDialog dialog = new JDialog((JFrame) null, "Pending Orders", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setSize(600, 400);
+        dialog.setLocationRelativeTo(null);
+
+        // Define column names for the pendingOrders table
+        String[] columnNames = {"Item Code", "Amount", "Reference", "Date"};
+        DefaultTableModel tableModel = new DefaultTableModel(columnNames, 0);
+        JTable table = new JTable(tableModel);
+
+        // Set up row sorter for filtering
+        TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(tableModel);
+        table.setRowSorter(sorter);
+        JPanel filterPanel = new JPanel(new GridLayout(1, columnNames.length));
+
+        // Create filter fields for each column
+        JTextField[] filterFields = new JTextField[columnNames.length];
+        for (int i = 0; i < columnNames.length; i++) {
+            filterFields[i] = new JTextField();
+            final int columnIndex = i;
+            filterFields[i].addCaretListener(e -> {
+                String filterText = filterFields[columnIndex].getText();
+                if (filterText.trim().isEmpty()) {
+                    sorter.setRowFilter(null);
+                } else {
+                    sorter.setRowFilter(RowFilter.regexFilter("(?i)" + filterText, columnIndex));
+                }
+            });
+            filterPanel.add(filterFields[i]);
+        }
+
+        // Retrieve data from pendingOrders table
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT `Item Code`, `Amount`, `Reference`, `Date` FROM pendingOrders");
+
+        // Populate the table with data from the ResultSet
+        while (rs.next()) {
+            Object[] rowData = {
+                    rs.getString("Item Code"),
+                    rs.getInt("Amount"),
+                    rs.getString("Reference"),
+                    rs.getString("Date")
+            };
+            tableModel.addRow(rowData);
+        }
+
+        // Add components to the dialog
+        dialog.setLayout(new BorderLayout());
+        dialog.add(filterPanel, BorderLayout.SOUTH);
+        dialog.add(new JScrollPane(table), BorderLayout.CENTER);
+        dialog.setVisible(true);
     }
 }
 
