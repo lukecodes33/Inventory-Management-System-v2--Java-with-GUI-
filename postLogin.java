@@ -1,47 +1,53 @@
 import javax.swing.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 
 public class postLogin {
 
     static void mainMenu(User user) throws SQLException {
 
-        while (true) {
+        String inventoryManagementPath = "database/inventoryManagementDatabase.db";
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + inventoryManagementPath)) {
 
-            int choice = showMainMenu(user);
+            while (true) {
 
-            if (choice == 0) {
-                break;
-            }
+                int choice = showMainMenu(user);
 
-            switch (choice) {
-
-                case 1:
-
-                    menuFunctions addItem = new menuFunctions();
-                    addItem.addItem(user);
+                if (choice == 0) {
                     break;
+                }
 
-                case 2:
+                switch (choice) {
 
-                    menuFunctions searchItems = new menuFunctions();
-                    searchItems.viewAllItems();
-                    break;
+                    case 1:
 
-                case 3:
-                    menuFunctions passwordReset = new menuFunctions();
-                    passwordReset.resetPassword(user);
-                    break;
+                        menuFunctions addItem = new menuFunctions();
+                        addItem.addItem(user, connection);
+                        break;
 
-                case 4:
-                    JOptionPane.showMessageDialog(null,"Goodbye " + user.getUsername());
-                    System.exit(0);
+                    case 2:
 
-                default:
-                    System.out.println("Invalid choice. Please try again.");
+                        menuFunctions searchItems = new menuFunctions();
+                        searchItems.viewAllItems(connection);
+                        break;
+
+                    case 3:
+                        menuFunctions passwordReset = new menuFunctions();
+                        passwordReset.resetPassword(user);
+                        break;
+
+                    case 4:
+                        JOptionPane.showMessageDialog(null, "Goodbye " + user.getUsername());
+                        System.exit(0);
+                        connection.close();
+
+                    default:
+                        System.out.println("Invalid choice. Please try again.");
+                }
             }
         }
     }
-
 
     private static int showMainMenu(User user) {
         // Create a panel to hold the message and title

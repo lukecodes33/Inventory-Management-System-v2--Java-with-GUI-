@@ -23,217 +23,218 @@ public class menuFunctions {
      * If the inputs are valid and the item is unique, it inserts the new item into the `Inventory` database and
      * logs the addition in the `movements` database.
      *
-     * @param user The current user, whose username is logged in the `movements` database as the action's originator.
+     * @param user       The current user, whose username is logged in the `movements` database as the action's originator.
      * @throws SQLException if a database access error occurs
      */
-    public void addItem(User user) throws SQLException {
+    public void addItem(User user, Connection connection) throws SQLException {
 
         boolean adminRights = user.hasAdminRights();
 
         if(adminRights) {
-            String itemDatabasePath = "database/itemDatabase.db";
             CountDownLatch latch = new CountDownLatch(1);
 
-            try (Connection itemConnection = DriverManager.getConnection("jdbc:sqlite:" + itemDatabasePath)) {
+            JFrame frame = new JFrame("Add Item");
+            frame.setSize(400, 350);
+            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+            frame.setLayout(null);
 
-                JFrame frame = new JFrame("Add Item");
-                frame.setSize(400, 350);
-                frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-                frame.setLayout(null);
+            JLabel itemCodeLabel = new JLabel("Item Code:");
+            itemCodeLabel.setBounds(10, 10, 100, 25);
+            frame.add(itemCodeLabel);
+            JTextField itemCodeText = new JTextField(20);
+            itemCodeText.setBounds(120, 10, 250, 25);
+            frame.add(itemCodeText);
 
-                JLabel itemCodeLabel = new JLabel("Item Code:");
-                itemCodeLabel.setBounds(10, 10, 100, 25);
-                frame.add(itemCodeLabel);
-                JTextField itemCodeText = new JTextField(20);
-                itemCodeText.setBounds(120, 10, 250, 25);
-                frame.add(itemCodeText);
+            JLabel itemNameLabel = new JLabel("Item Name:");
+            itemNameLabel.setBounds(10, 50, 100, 25);
+            frame.add(itemNameLabel);
+            JTextField itemNameText = new JTextField(20);
+            itemNameText.setBounds(120, 50, 250, 25);
+            frame.add(itemNameText);
 
-                JLabel itemNameLabel = new JLabel("Item Name:");
-                itemNameLabel.setBounds(10, 50, 100, 25);
-                frame.add(itemNameLabel);
-                JTextField itemNameText = new JTextField(20);
-                itemNameText.setBounds(120, 50, 250, 25);
-                frame.add(itemNameText);
+            JLabel itemStockCountLabel = new JLabel("Stock Count:");
+            itemStockCountLabel.setBounds(10, 90, 100, 25);
+            frame.add(itemStockCountLabel);
+            JTextField itemStockCountText = new JTextField(20);
+            itemStockCountText.setBounds(120, 90, 250, 25);
+            frame.add(itemStockCountText);
 
-                JLabel itemStockCountLabel = new JLabel("Stock Count:");
-                itemStockCountLabel.setBounds(10, 90, 100, 25);
-                frame.add(itemStockCountLabel);
-                JTextField itemStockCountText = new JTextField(20);
-                itemStockCountText.setBounds(120, 90, 250, 25);
-                frame.add(itemStockCountText);
+            JLabel reOrderTriggerLabel = new JLabel("ReOrder Trigger:");
+            reOrderTriggerLabel.setBounds(10, 130, 100, 25);
+            frame.add(reOrderTriggerLabel);
+            JTextField reOrderTriggerText = new JTextField(20);
+            reOrderTriggerText.setBounds(120, 130, 250, 25);
+            frame.add(reOrderTriggerText);
 
-                JLabel reOrderTriggerLabel = new JLabel("ReOrder Trigger:");
-                reOrderTriggerLabel.setBounds(10, 130, 100, 25);
-                frame.add(reOrderTriggerLabel);
-                JTextField reOrderTriggerText = new JTextField(20);
-                reOrderTriggerText.setBounds(120, 130, 250, 25);
-                frame.add(reOrderTriggerText);
+            JLabel purchasePriceLabel = new JLabel("Purchase Price:");
+            purchasePriceLabel.setBounds(10, 170, 100, 25);
+            frame.add(purchasePriceLabel);
+            JTextField purchasePriceText = new JTextField(20);
+            purchasePriceText.setBounds(120, 170, 250, 25);
+            frame.add(purchasePriceText);
 
-                JLabel purchasePriceLabel = new JLabel("Purchase Price:");
-                purchasePriceLabel.setBounds(10, 170, 100, 25);
-                frame.add(purchasePriceLabel);
-                JTextField purchasePriceText = new JTextField(20);
-                purchasePriceText.setBounds(120, 170, 250, 25);
-                frame.add(purchasePriceText);
+            JLabel salePriceLabel = new JLabel("Sales Price:");
+            salePriceLabel.setBounds(10, 210, 100, 25);
+            frame.add(salePriceLabel);
+            JTextField salePriceText = new JTextField(20);
+            salePriceText.setBounds(120, 210, 250, 25);
+            frame.add(salePriceText);
 
-                JLabel salePriceLabel = new JLabel("Sales Price:");
-                salePriceLabel.setBounds(10, 210, 100, 25);
-                frame.add(salePriceLabel);
-                JTextField salePriceText = new JTextField(20);
-                salePriceText.setBounds(120, 210, 250, 25);
-                frame.add(salePriceText);
+            JButton addButton = new JButton("Add");
+            addButton.setBounds(170, 260, 100, 25);
+            frame.add(addButton);
 
-                JButton addButton = new JButton("Add");
-                addButton.setBounds(170, 260, 100, 25);
-                frame.add(addButton);
+            JButton cancelButton = new JButton("Cancel");
+            cancelButton.setBounds(280, 260, 100, 25);
+            frame.add(cancelButton);
 
-                JButton cancelButton = new JButton("Cancel");
-                cancelButton.setBounds(280, 260, 100, 25);
-                frame.add(cancelButton);
+            addButton.addActionListener(new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
 
-                addButton.addActionListener(new ActionListener() {
-                    public void actionPerformed(ActionEvent e) {
+                    int counter = 0;
+                    boolean exists = false;
 
-                        int counter = 0;
-                        boolean exists = false;
+                    String itemCode = itemCodeText.getText();
+                    if (itemCode == null || itemCode.trim().isEmpty()) {
+                        JOptionPane.showMessageDialog(frame, "Item Code cannot be empty. Please enter a valid Item Code.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    } else {
+                        // Prepare the SQL query to check for itemCode existence
+                        String query = "SELECT COUNT(*) AS count FROM inventory WHERE `Item Code` = ?";
+                        try (PreparedStatement checkForDuplicate = connection.prepareStatement(query)) {
+                            checkForDuplicate.setString(1, itemCode);
+                            ResultSet rs = checkForDuplicate.executeQuery();
 
-                        String itemCode = itemCodeText.getText();
-                        if (itemCode == null || itemCode.trim().isEmpty()) {
-                            JOptionPane.showMessageDialog(frame, "Item Code cannot be empty. Please enter a valid Item Code.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        } else {
-                            // Prepare the SQL query to check for itemCode existence
-                            String query = "SELECT COUNT(*) AS count FROM inventory WHERE `Item Code` = ?";
-                            try (PreparedStatement checkForDuplicate = itemConnection.prepareStatement(query)) {
-                                checkForDuplicate.setString(1, itemCode);
-                                ResultSet rs = checkForDuplicate.executeQuery();
-
-                                try {
-                                    if (rs.next()) {
-                                        int count = rs.getInt("count");
-                                        if (count > 0) {
-                                            JOptionPane.showMessageDialog(null, "Item Code already exists", "Duplicate Entry", JOptionPane.WARNING_MESSAGE);
-                                            exists = true;
-                                        }
+                            try {
+                                if (rs.next()) {
+                                    int count = rs.getInt("count");
+                                    if (count > 0) {
+                                        JOptionPane.showMessageDialog(null, "Item Code already exists", "Duplicate Entry", JOptionPane.WARNING_MESSAGE);
+                                        exists = true;
                                     }
-                                } catch (SQLException ex) {
-                                    throw new RuntimeException(ex);
                                 }
                             } catch (SQLException ex) {
                                 throw new RuntimeException(ex);
                             }
+                        } catch (SQLException ex) {
+                            throw new RuntimeException(ex);
                         }
+                    }
 
 
-                        String itemName = itemNameText.getText();
-                        if (itemName == null || itemName.trim().isEmpty()) {
-                            JOptionPane.showMessageDialog(frame, "Item Name cannot be empty. Please enter a valid Item Name.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        }
+                    String itemName = itemNameText.getText();
+                    if (itemName == null || itemName.trim().isEmpty()) {
+                        JOptionPane.showMessageDialog(frame, "Item Name cannot be empty. Please enter a valid Item Name.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    }
 
-                        int stockCount = 0;
-                        try {
-                            stockCount = Integer.parseInt(itemStockCountText.getText());
-                            counter += 1;
-                        } catch (NumberFormatException ex) {
-                            JOptionPane.showMessageDialog(frame, "Please enter a valid Stock Count.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        }
+                    int stockCount = 0;
+                    try {
+                        stockCount = Integer.parseInt(itemStockCountText.getText());
+                        counter += 1;
+                    } catch (NumberFormatException ex) {
+                        JOptionPane.showMessageDialog(frame, "Please enter a valid Stock Count.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    }
 
-                        int reOrderTrigger = 0;
-                        try {
-                            reOrderTrigger = Integer.parseInt(reOrderTriggerText.getText());
-                            counter += 1;
-                        } catch (NumberFormatException ex) {
-                            JOptionPane.showMessageDialog(frame, "Please enter a valid Re Order Trigger.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        }
+                    int reOrderTrigger = 0;
+                    try {
+                        reOrderTrigger = Integer.parseInt(reOrderTriggerText.getText());
+                        counter += 1;
+                    } catch (NumberFormatException ex) {
+                        JOptionPane.showMessageDialog(frame, "Please enter a valid Re Order Trigger.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    }
 
-                        double purchasePrice = 0;
-                        try {
-                            purchasePrice = Double.parseDouble(purchasePriceText.getText());
-                            counter += 1;
-                        } catch (NumberFormatException ex) {
-                            JOptionPane.showMessageDialog(frame, "Please enter a valid Purchase Price.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        }
+                    double purchasePrice = 0;
+                    try {
+                        purchasePrice = Double.parseDouble(purchasePriceText.getText());
+                        counter += 1;
+                    } catch (NumberFormatException ex) {
+                        JOptionPane.showMessageDialog(frame, "Please enter a valid Purchase Price.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    }
 
-                        double salesPrice = 0;
-                        try {
-                            salesPrice = Double.parseDouble(salePriceText.getText());
-                            counter += 1;
-                        } catch (NumberFormatException ex) {
-                            JOptionPane.showMessageDialog(frame, "Please enter a valid Sales Price.", "Input Error", JOptionPane.ERROR_MESSAGE);
-                        }
+                    double salesPrice = 0;
+                    try {
+                        salesPrice = Double.parseDouble(salePriceText.getText());
+                        counter += 1;
+                    } catch (NumberFormatException ex) {
+                        JOptionPane.showMessageDialog(frame, "Please enter a valid Sales Price.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                    }
 
-                        if (counter == 4 && itemCode != null && itemName != null && !exists) {
-                            String insertQuery = "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `ReOrder Trigger`, `Purchase Price`, `Sale Price`, `Amount Sold`, `Profit`, `Removed`) " +
-                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    if (counter == 4 && itemCode != null && itemName != null && !exists) {
+                        String insertQuery = "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, `ReOrder Trigger`, `Purchase Price`, `Sale Price`, `Amount Sold`, `Profit`, `Written Off`) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-                            try (PreparedStatement insertStmt = itemConnection.prepareStatement(insertQuery)) {
-                                insertStmt.setString(1, itemCode);
-                                insertStmt.setString(2, itemName);
-                                insertStmt.setString(3, String.valueOf(stockCount));
-                                insertStmt.setString(4, String.valueOf(0));
-                                insertStmt.setString(5, String.valueOf(reOrderTrigger));
-                                insertStmt.setString(6, String.valueOf(purchasePrice));
-                                insertStmt.setString(7, String.valueOf(salesPrice));
-                                insertStmt.setString(8, String.valueOf(0));
-                                insertStmt.setString(9, String.valueOf(0));
-                                insertStmt.setString(10, String.valueOf(0));
-                                insertStmt.executeUpdate();
+                        try (PreparedStatement insertStmt = connection.prepareStatement(insertQuery)) {
+                            insertStmt.setString(1, itemCode);
+                            insertStmt.setString(2, itemName);
+                            insertStmt.setString(3, String.valueOf(stockCount));
+                            insertStmt.setString(4, String.valueOf(0));
+                            insertStmt.setString(5, String.valueOf(0));
+                            insertStmt.setString(6, String.valueOf(reOrderTrigger));
+                            insertStmt.setString(7, String.valueOf(purchasePrice));
+                            insertStmt.setString(8, String.valueOf(salesPrice));
+                            insertStmt.setString(9, String.valueOf(0));
+                            insertStmt.setString(10, String.valueOf(0));
+                            insertStmt.setString(11, String.valueOf(0));
+                            insertStmt.executeUpdate();
 
-                                JOptionPane.showMessageDialog(null, "Item added successfully");
+                            JOptionPane.showMessageDialog(null, "Item added successfully");
 
+                            String movementQuery = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                                    "VALUES (?, ?, ?, ?, ?)";
 
-                                String movementsDatabase = "database/movements.db";
-                                try (Connection movementsConnections = DriverManager.getConnection("jdbc:sqlite:" + movementsDatabase)) {
-
-                                    String movementQuery = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
-                                            "VALUES (?, ?, ?, ?, ?)";
-
-                                    try (PreparedStatement movementStatement = movementsConnections.prepareStatement(movementQuery)) {
-                                        movementStatement.setString(1, itemCode);
-                                        movementStatement.setString(2, String.valueOf(stockCount));
-                                        movementStatement.setString(3, "ADD");
-                                        movementStatement.setString(4, user.getUsername());
-                                        movementStatement.setString(5, new dateTime().formattedDateTime());
-                                        movementStatement.executeUpdate();
-                                    }
-                                }
-
+                            try (PreparedStatement movementStatement = connection.prepareStatement(movementQuery)) {
+                                movementStatement.setString(1, itemCode);
+                                movementStatement.setString(2, String.valueOf(stockCount));
+                                movementStatement.setString(3, "ADD");
+                                movementStatement.setString(4, user.getUsername());
+                                movementStatement.setString(5, new dateTime().formattedDateTime());
+                                movementStatement.executeUpdate();
                             } catch (SQLException ex) {
                                 throw new RuntimeException(ex);
                             }
 
-                            frame.dispose();
-                            latch.countDown();
 
+                        } catch (SQLException ex) {
+                            throw new RuntimeException(ex);
                         }
+
+                        frame.dispose();
+                        latch.countDown();
+
                     }
-                });
-
-                cancelButton.addActionListener(new ActionListener() {
-                    public void actionPerformed(ActionEvent e) {
-                        frame.dispose(); // Close the current frame
-                        latch.countDown(); // Release the latch to allow the main loop to continue
-                    }
-                });
-
-                frame.addWindowListener(new WindowAdapter() {
-                    public void windowClosing(WindowEvent e) {
-                        System.exit(0);
-                    }
-                });
-
-                frame.setLocationRelativeTo(null);
-                frame.setVisible(true);
-
-                try {
-                    latch.await();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
                 }
+            });
 
+            cancelButton.addActionListener(new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
+                    frame.dispose(); // Close the current frame
+                    latch.countDown(); // Release the latch to allow the main loop to continue
+                }
+            });
+
+            frame.addWindowListener(new WindowAdapter() {
+                public void windowClosing(WindowEvent e) {
+                    try {
+                        connection.close();
+                    } catch (SQLException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                    System.exit(0);
+
+                }
+            });
+
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } else {
-            JOptionPane.showMessageDialog(null, "You do not have access to this feature");
-        }
+
+    } else {
+        JOptionPane.showMessageDialog(null, "You do not have access to this feature");
+    }
 
     }
 
@@ -266,8 +267,7 @@ public class menuFunctions {
      */
 
 
-    public void viewAllItems() {
-        String itemDatabasePath = "database/itemDatabase.db";
+    public void viewAllItems(Connection connection) throws SQLException {
 
         JDialog dialog = new JDialog((JFrame) null, "Inventory Items", true);
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -275,7 +275,7 @@ public class menuFunctions {
         dialog.setLocationRelativeTo(null);
 
 
-        String[] columnNames = {"Item Code", "Item Name", "Stock", "On Order", "ReOrder Trigger", "Purchase Price($)", "Sale Price($)"};
+        String[] columnNames = {"Item Code", "Item Name", "Stock", "On Order", "On Dock", "Purchase Price($)", "Sale Price($)"};
         DefaultTableModel tableModel = new DefaultTableModel(columnNames, 0);
         JTable table = new JTable(tableModel);
 
@@ -298,9 +298,9 @@ public class menuFunctions {
             filterPanel.add(filterFields[i]);
         }
 
-        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + itemDatabasePath);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, `ReOrder Trigger`, `Purchase Price`, `Sale Price` FROM inventory")) {
+         Statement stmt = connection.createStatement();
+         ResultSet rs = stmt.executeQuery("SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, `Purchase Price`, `Sale Price` FROM inventory");
+        {
 
             while (rs.next()) {
                 Object[] rowData = {
@@ -308,14 +308,12 @@ public class menuFunctions {
                         rs.getString("Item Name"),
                         rs.getInt("Stock"),
                         rs.getInt("On Order"),
-                        rs.getInt("ReOrder Trigger"),
+                        rs.getInt("On Dock"),
                         rs.getDouble("Purchase Price"),
                         rs.getDouble("Sale Price")
                 };
                 tableModel.addRow(rowData);
             }
-        } catch (SQLException ex) {
-            throw new RuntimeException(ex);
         }
 
         // Add components to the dialog
@@ -328,12 +326,12 @@ public class menuFunctions {
 
     /**
      * Resets the password for the specified user.
-     *
+     * <p>
      * This method displays a GUI dialog that prompts the user to enter their current
      * password, a new password, and confirm the new password. It allows up to three
      * attempts to enter the current password correctly. If successful, the new password
      * is updated in the database.
-     *
+     * <p>
      * If the user cancels the operation, the Application will terminate without making any changes.
      * This is to prevent anyone trying to change a users password if it is signed in on an open machine.
      *
