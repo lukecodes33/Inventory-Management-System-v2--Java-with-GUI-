@@ -1,0 +1,12 @@
+This program is something i have decided to try and create based on my experience working with various warehouse
+environment applications. It is a barebones small scale inventory management system that would be effective for
+small scale businesses to use to keep track of inventory, orders and allow specific permissions to the required
+users.
+
+I have previously created a command line version of this in python however i have decided due to wanting a nicer GUI
+and an upgrade to speed, i am re creating it in java. If you are downloading this your initial login will be
+
+User: Admin
+password: firstLogin
+
+all password resets and database creating will be done on first login.

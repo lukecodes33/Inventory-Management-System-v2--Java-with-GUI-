@@ -44,6 +44,12 @@ public class postLogin {
                         showPendingOrders.displayPendingOrders(connection);
                         break;
 
+                    case 5:
+
+                        menuFunctions receiveOrder = new menuFunctions();
+                        receiveOrder.receiveOrder(user, connection);
+                        break;
+
 
                     case 13:
                         menuFunctions passwordReset = new menuFunctions();
@@ -84,7 +90,7 @@ public class postLogin {
         // Create options for the dialog
         String[] options = {
                 "Add Item",
-                "Search Items",
+                "View Items",
                 "Create Purchase Order",
                 "View Pending Orders",
                 "Receive Order",

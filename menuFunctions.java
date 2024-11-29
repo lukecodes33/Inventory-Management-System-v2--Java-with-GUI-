@@ -61,21 +61,21 @@ public class menuFunctions {
             itemStockCountText.setBounds(120, 90, 250, 25);
             frame.add(itemStockCountText);
 
-            JLabel reOrderTriggerLabel = new JLabel("ReOrder Trigger:");
+            JLabel reOrderTriggerLabel = new JLabel("Re-Order Trigger:");
             reOrderTriggerLabel.setBounds(10, 130, 100, 25);
             frame.add(reOrderTriggerLabel);
             JTextField reOrderTriggerText = new JTextField(20);
             reOrderTriggerText.setBounds(120, 130, 250, 25);
             frame.add(reOrderTriggerText);
 
-            JLabel purchasePriceLabel = new JLabel("Purchase Price:");
+            JLabel purchasePriceLabel = new JLabel("Purchase Price: ($)");
             purchasePriceLabel.setBounds(10, 170, 100, 25);
             frame.add(purchasePriceLabel);
             JTextField purchasePriceText = new JTextField(20);
             purchasePriceText.setBounds(120, 170, 250, 25);
             frame.add(purchasePriceText);
 
-            JLabel salePriceLabel = new JLabel("Sales Price:");
+            JLabel salePriceLabel = new JLabel("Sales Price: ($)");
             salePriceLabel.setBounds(10, 210, 100, 25);
             frame.add(salePriceLabel);
             JTextField salePriceText = new JTextField(20);
@@ -687,6 +687,173 @@ public class menuFunctions {
         dialog.add(filterPanel, BorderLayout.SOUTH);
         dialog.add(new JScrollPane(table), BorderLayout.CENTER);
         dialog.setVisible(true);
+    }
+
+    
+    /**
+     * Processes the reception of items from a pending order. The user is prompted to enter a reference number,
+     * and then the method performs the following:
+     * - Retrieves pending items for the given reference number.
+     * - Allows the user to input received amounts for each item.
+     * - Updates the pendingOrders table to subtract the received amounts.
+     * - Updates the Inventory table to reflect the changes in "On Order" and "On Dock" quantities.
+     * - Logs the movement in the movements table.
+     * - Deletes completed orders from the pendingOrders table where the amount is zero.
+     *
+     * @param user       The user performing the operation, used for logging movements.
+     * @param connection The database connection to use for executing queries.
+     * @throws SQLException if any database access error occurs.
+     */
+    public void receiveOrder(User user, Connection connection) throws SQLException {
+        String referenceNumber = JOptionPane.showInputDialog("Enter reference number: ");
+
+        if (referenceNumber == null) {
+            return;
+
+        }
+
+        if (referenceNumber.isEmpty()) {
+            JOptionPane.showMessageDialog(null, "Reference number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        HashMap<String, Integer> resultMap = new HashMap<>();
+        String query = "SELECT `Item Code`, Amount FROM pendingOrders WHERE `Reference` = ?";
+
+        try (PreparedStatement checkOrder = connection.prepareStatement(query)) {
+            checkOrder.setString(1, referenceNumber);
+
+            try (ResultSet rs = checkOrder.executeQuery()) {
+                while (rs.next()) {
+                    String itemCode = rs.getString("Item Code");
+                    int amount = rs.getInt("Amount");
+                    resultMap.put(itemCode, amount);
+                }
+
+                if (resultMap.isEmpty()) {
+                    JOptionPane.showMessageDialog(null, "No orders found for the given reference number.", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+
+                HashMap<String, Integer> receivedMap = new HashMap<>();
+
+                for (Map.Entry<String, Integer> entry : resultMap.entrySet()) {
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    String codeOrdered = entry.getKey();
+                    int amountOrdered = entry.getValue();
+                    String formattedString = String.format("%s - Amount on Order: %d           Received:", codeOrdered, amountOrdered);
+
+
+                    JFrame frame = new JFrame(codeOrdered);
+                    frame.setSize(350, 115);
+                    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                    frame.setLayout(null);
+
+                    JLabel amountLabel = new JLabel(formattedString);
+                    amountLabel.setBounds(10, 10, 250, 25);
+                    frame.add(amountLabel);
+
+                    JTextField amountReceived = new JTextField(20);
+                    amountReceived.setBounds(250, 10, 80, 25);
+                    frame.add(amountReceived);
+
+                    JButton submitButton = new JButton("Submit");
+                    submitButton.setBounds(250, 40, 80, 25);
+                    frame.add(submitButton);
+
+                    submitButton.addActionListener(new ActionListener() {
+                        @Override
+                        public void actionPerformed(ActionEvent e) {
+                            String receivedAmountString = amountReceived.getText();
+
+                            try {
+                                int receivedAmount = Integer.parseInt(receivedAmountString);
+
+                                if (receivedAmount <= 0) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. Received amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                    return;
+                                }
+
+                                if (amountOrdered - receivedAmount < 0) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. Received amount cannot exceed the amount ordered.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                    return;
+                                }
+
+
+                                receivedMap.put(codeOrdered, receivedAmount);
+
+                                frame.dispose();
+                                latch.countDown();
+
+                            } catch (NumberFormatException ex) {
+                                JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a valid integer.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                            }
+                        }
+                    });
+
+                    frame.setLocationRelativeTo(null);
+                    frame.setVisible(true);
+
+                    try {
+                        latch.await();
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                for (Map.Entry<String, Integer> entry : receivedMap.entrySet()) {
+
+                    String codeReceived = entry.getKey();
+                    int amountReceived = entry.getValue();
+
+                    String updateReceivingLog = "UPDATE pendingOrders SET Amount = Amount - ? WHERE `Reference` = ? AND `Item Code` = ?";
+                    try (PreparedStatement preparedStatement = connection.prepareStatement(updateReceivingLog)) {
+                        preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                        preparedStatement.setString(2, referenceNumber); // Match reference number
+                        preparedStatement.setString(3, codeReceived); // Match item code
+                        preparedStatement.executeUpdate();
+                    }
+
+                    String updateOnOrder = "UPDATE Inventory SET `On Order` = `On Order` - ? WHERE `Item Code` = ?";
+                    try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnOrder)) {
+                        preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                        preparedStatement.setString(2, codeReceived); // Match reference number
+                        preparedStatement.executeUpdate();
+
+                    }
+
+                    String updateOnDock = "UPDATE Inventory SET `On Dock` = `On Dock` + ? WHERE `Item Code` = ?";
+                    try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnDock)) {
+                        preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                        preparedStatement.setString(2, codeReceived); // Match reference number
+                        preparedStatement.executeUpdate();
+
+                    }
+
+                    String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                            "VALUES (?, ?, ?, ?, ?)";
+                    try (PreparedStatement movementStatement = connection.prepareStatement(updateMovements)) {
+                        movementStatement.setString(1, codeReceived);
+                        movementStatement.setString(2, String.valueOf(amountReceived));
+                        movementStatement.setString(3, "RECEIVED");
+                        movementStatement.setString(4, user.getUsername());
+                        movementStatement.setString(5, new dateTime().formattedDateTime());
+                        movementStatement.executeUpdate();
+                    }
+
+                    String deleteCompletedOrder = "DELETE FROM pendingOrders WHERE `Reference` = ? AND `Item Code` = ? AND Amount = 0";
+                    try (PreparedStatement deleteStatement = connection.prepareStatement(deleteCompletedOrder)) {
+                        deleteStatement.setString(1, referenceNumber); // Match reference number
+                        deleteStatement.setString(2, codeReceived); // Match item code
+                        deleteStatement.executeUpdate();
+                    }
+                }
+
+            }
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 }
 

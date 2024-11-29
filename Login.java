@@ -126,7 +126,6 @@ private static boolean checkAdminRights(Connection connection, String username) 
     }
 }
 
-
 /**
  * Method to check if the user has admin rights.
  *
