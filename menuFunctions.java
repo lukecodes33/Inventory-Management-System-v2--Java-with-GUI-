@@ -689,7 +689,7 @@ public class menuFunctions {
         dialog.setVisible(true);
     }
 
-    
+
     /**
      * Processes the reception of items from a pending order. The user is prompted to enter a reference number,
      * and then the method performs the following:
@@ -848,6 +848,8 @@ public class menuFunctions {
                         deleteStatement.setString(2, codeReceived); // Match item code
                         deleteStatement.executeUpdate();
                     }
+
+                    JOptionPane.showMessageDialog(null, "Items Received!");
                 }
 
             }
@@ -855,5 +857,212 @@ public class menuFunctions {
             JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
+
+
+
+
+
+    public void putAwayStock(User user, Connection connection) throws SQLException {
+        String itemCode = JOptionPane.showInputDialog("Enter item code to put-away: ");
+
+        if (itemCode == null) {
+            return;
+
+        }
+
+        if (itemCode.isEmpty()) {
+            JOptionPane.showMessageDialog(null, "Reference number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        HashMap<String, Integer> resultMap = new HashMap<>();
+        String query = "SELECT `On Dock` FROM Inventory WHERE `Item Code` = ?";
+
+        try (PreparedStatement checkOrder = connection.prepareStatement(query)) {
+            checkOrder.setString(1, itemCode);
+
+            try (ResultSet rs = checkOrder.executeQuery()) {
+                while (rs.next()) {
+                    int onDock = rs.getInt("On Dock");
+                    resultMap.put(itemCode, onDock);
+                    System.out.println(resultMap);
+                }
+
+                if (resultMap.isEmpty()) {
+                    JOptionPane.showMessageDialog(null, "No orders found for the given item code", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+
+                HashMap<String, Integer> putAwayMap = new HashMap<>();
+
+                for (Map.Entry<String, Integer> entry : resultMap.entrySet()) {
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    String itemOnDock = entry.getKey();
+                    int onDockAmount = entry.getValue();
+                    String formattedString = String.format("%s - Amount on dock: %d           Put-away:", itemOnDock, onDockAmount);
+
+
+                    JFrame frame = new JFrame(itemOnDock);
+                    frame.setSize(350, 115);
+                    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                    frame.setLayout(null);
+
+                    JLabel amountOnDockLabel = new JLabel(formattedString);
+                    amountOnDockLabel.setBounds(10, 10, 250, 25);
+                    frame.add(amountOnDockLabel);
+
+                    JTextField putAwayAmount = new JTextField(20);
+                    putAwayAmount.setBounds(250, 10, 80, 25);
+                    frame.add(putAwayAmount);
+
+                    JButton submitButton = new JButton("Submit");
+                    submitButton.setBounds(250, 40, 80, 25);
+                    frame.add(submitButton);
+
+                    submitButton.addActionListener(new ActionListener() {
+                        @Override
+                        public void actionPerformed(ActionEvent e) {
+                            String putAwayAmountString = putAwayAmount.getText();
+
+                            try {
+                                int putAwayAmount = Integer.parseInt(putAwayAmountString);
+
+                                if (putAwayAmount <= 0) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. put Away amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                    return;
+                                }
+
+                                if (onDockAmount - putAwayAmount < 0) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. put away amount cannot exceed the amount on dock.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                    return;
+                                }
+
+
+                                putAwayMap.put(itemCode, putAwayAmount);
+
+
+                                frame.dispose();
+                                latch.countDown();
+
+                            } catch (NumberFormatException ex) {
+                                JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a valid integer.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                            }
+                        }
+                    });
+
+                    frame.setLocationRelativeTo(null);
+                    frame.setVisible(true);
+
+                    try {
+                        latch.await();
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                for (Map.Entry<String, Integer> entry : putAwayMap.entrySet()) {
+
+                    String codeOnDock = entry.getKey();
+                    int putAwayAmount = entry.getValue();
+
+
+                    String updateOnOrder = "UPDATE Inventory SET `On Dock` = `On Dock` - ? WHERE `Item Code` = ?";
+                    try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnOrder)) {
+                        preparedStatement.setInt(1, putAwayAmount);
+                        preparedStatement.setString(2, codeOnDock);
+                        preparedStatement.executeUpdate();
+
+                    }
+
+                    String updateOnDock = "UPDATE Inventory SET `Stock` = `Stock` + ? WHERE `Item Code` = ?";
+                    try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnDock)) {
+                        preparedStatement.setInt(1, putAwayAmount);
+                        preparedStatement.setString(2, codeOnDock);
+                        preparedStatement.executeUpdate();
+
+                    }
+
+                    String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                            "VALUES (?, ?, ?, ?, ?)";
+                    try (PreparedStatement movementStatement = connection.prepareStatement(updateMovements)) {
+                        movementStatement.setString(1, codeOnDock);
+                        movementStatement.setString(2, String.valueOf(putAwayAmount));
+                        movementStatement.setString(3, "PUT-AWAY");
+                        movementStatement.setString(4, user.getUsername());
+                        movementStatement.setString(5, new dateTime().formattedDateTime());
+                        movementStatement.executeUpdate();
+                    }
+
+                    JOptionPane.showMessageDialog(null, "Put Away Successful");
+                }
+
+            }
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+
+
+
+    public void lowStockCheck(Connection connection) throws SQLException {
+
+        JDialog dialog = new JDialog((JFrame) null, "Low Stock", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setSize(600, 400);
+        dialog.setLocationRelativeTo(null);
+
+        String[] columnNames = {"Item Code", "Item Name", "Stock", "On Dock", "On Order"};
+        DefaultTableModel tableModel = new DefaultTableModel(columnNames, 0);
+        JTable table = new JTable(tableModel);
+
+        // Set up row sorter for filtering
+        TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(tableModel);
+        table.setRowSorter(sorter);
+        JPanel filterPanel = new JPanel(new GridLayout(1, columnNames.length));
+
+        // Create filter fields for each column
+        JTextField[] filterFields = new JTextField[columnNames.length];
+        for (int i = 0; i < columnNames.length; i++) {
+            filterFields[i] = new JTextField();
+            final int columnIndex = i;
+            filterFields[i].addCaretListener(e -> {
+                String filterText = filterFields[columnIndex].getText();
+                if (filterText.trim().isEmpty()) {
+                    sorter.setRowFilter(null);
+                } else {
+                    sorter.setRowFilter(RowFilter.regexFilter("(?i)" + filterText, columnIndex));
+                }
+            });
+            filterPanel.add(filterFields[i]);
+        }
+
+
+        String query = """
+            SELECT `Item Code`,`Item Name`, `Stock`, `On Dock`, `On Order`
+            FROM Inventory
+            WHERE `ReOrder Trigger` >= `Stock`
+            """;
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery(query);
+
+
+        while (rs.next()) {
+            Object[] rowData = {
+                    rs.getString("Item Code"),
+                    rs.getString("Item Name"),
+                    rs.getInt("Stock"),
+                    rs.getInt("On Dock"),
+                    rs.getInt("On Order")
+            };
+            tableModel.addRow(rowData);
+        }
+
+        dialog.setLayout(new BorderLayout());
+        dialog.add(filterPanel, BorderLayout.SOUTH);
+        dialog.add(new JScrollPane(table), BorderLayout.CENTER);
+        dialog.setVisible(true);
+    }
+
 }
 

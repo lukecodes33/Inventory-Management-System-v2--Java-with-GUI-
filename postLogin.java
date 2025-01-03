@@ -50,6 +50,18 @@ public class postLogin {
                         receiveOrder.receiveOrder(user, connection);
                         break;
 
+                    case 6:
+
+                        menuFunctions putAwayStock = new menuFunctions();
+                        putAwayStock.putAwayStock(user, connection);
+                        break;
+
+                    case 7:
+
+                        menuFunctions lowStockCheck = new menuFunctions();
+                        lowStockCheck.lowStockCheck(connection);
+                        break;
+
 
                     case 13:
                         menuFunctions passwordReset = new menuFunctions();
