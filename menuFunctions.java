@@ -859,9 +859,26 @@ public class menuFunctions {
     }
 
 
-
-
-
+    /**
+     * Handles the process of putting away stock from the "On Dock" section of the inventory into the main "Stock" section.
+     *
+     * This method performs the following operations:
+     * 1. Prompts the user to enter an item code to put away stock.
+     * 2. Checks the database for the specified item code in the "Inventory" table and retrieves the "On Dock" quantity.
+     * 3. If no stock is found for the item code, displays a message to the user and terminates the process.
+     * 4. For each item with stock on dock:
+     *    - Displays a dialog to input the quantity to put away.
+     *    - Validates the input to ensure it is a positive integer and does not exceed the available "On Dock" quantity.
+     *    - Updates the database to:
+     *      a. Deduct the specified quantity from "On Dock".
+     *      b. Add the specified quantity to "Stock".
+     *      c. Log the transaction in the "movements" table with the type "PUT-AWAY".
+     * 5. Displays a confirmation message upon successful completion of the operation.
+     *
+     * @param user       The user performing the put-away operation. Used for logging purposes.
+     * @param connection The database connection used to perform queries and updates.
+     * @throws SQLException If there is an issue executing SQL queries or updates.
+     */
     public void putAwayStock(User user, Connection connection) throws SQLException {
         String itemCode = JOptionPane.showInputDialog("Enter item code to put-away: ");
 
@@ -889,7 +906,7 @@ public class menuFunctions {
                 }
 
                 if (resultMap.isEmpty()) {
-                    JOptionPane.showMessageDialog(null, "No orders found for the given item code", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                    JOptionPane.showMessageDialog(null, "No put away found for the given item code", "No Results", JOptionPane.INFORMATION_MESSAGE);
                     return;
                 }
 
@@ -1003,8 +1020,18 @@ public class menuFunctions {
     }
 
 
-
-
+    /**
+     * Displays a dialog showing items with low stock levels, based on the "ReOrder Trigger" value.
+     *
+     * This method performs the following operations:
+     * 1. Queries the "Inventory" table to retrieve items where the "ReOrder Trigger" value is greater than or equal to the "Stock".
+     * 2. Displays the results in a table with columns for "Item Code", "Item Name", "Stock", "On Dock", and "On Order".
+     * 3. Provides a filter input for each column, allowing users to filter displayed data dynamically.
+     * 4. Presents the data in a dialog window for review and analysis.
+     *
+     * @param connection The database connection used to execute the SQL query.
+     * @throws SQLException If there is an issue executing the SQL query.
+     */
     public void lowStockCheck(Connection connection) throws SQLException {
 
         JDialog dialog = new JDialog((JFrame) null, "Low Stock", true);
@@ -1064,5 +1091,718 @@ public class menuFunctions {
         dialog.setVisible(true);
     }
 
+
+
+
+
+
+
+    public void adjustReOrderTrigger(User user, Connection connection) throws SQLException {
+
+        boolean adminRights = user.hasAdminRights();
+
+        if (adminRights) {
+            String itemCode = JOptionPane.showInputDialog("Please enter the item code you would like to update: ");
+
+            if (itemCode == null) {
+                return;
+
+            }
+
+            if (itemCode.isEmpty()) {
+                JOptionPane.showMessageDialog(null, "Reference number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            HashMap<String, Integer> resultMap = new HashMap<>();
+            String query = "SELECT `ReOrder Trigger` FROM Inventory WHERE `Item Code` = ?";
+
+            try (PreparedStatement checkOrder = connection.prepareStatement(query)) {
+                checkOrder.setString(1, itemCode);
+
+                try (ResultSet rs = checkOrder.executeQuery()) {
+                    while (rs.next()) {
+                        int reOrderTrigger = rs.getInt("ReOrder Trigger");
+                        resultMap.put(itemCode, reOrderTrigger);
+                    }
+
+                    if (resultMap.isEmpty()) {
+                        JOptionPane.showMessageDialog(null, "Item not found.", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+
+                    HashMap<String, Integer> updatedReOrderMap = new HashMap<>();
+
+                    for (Map.Entry<String, Integer> entry : resultMap.entrySet()) {
+                        CountDownLatch latch = new CountDownLatch(1);
+
+                        String oldValue = entry.getKey();
+                        int newValue = entry.getValue();
+                        String formattedText = String.format("%s - Current Trigger Value: %d           Updated:", oldValue, newValue);
+
+
+                        JFrame frame = new JFrame(itemCode);
+                        frame.setSize(350, 115);
+                        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                        frame.setLayout(null);
+
+                        JLabel amountLabel = new JLabel(formattedText);
+                        amountLabel.setBounds(10, 10, 250, 25);
+                        frame.add(amountLabel);
+
+                        JTextField newTriggerValue = new JTextField(20);
+                        newTriggerValue.setBounds(250, 10, 80, 25);
+                        frame.add(newTriggerValue);
+
+                        JButton submitButton = new JButton("Submit");
+                        submitButton.setBounds(250, 40, 80, 25);
+                        frame.add(submitButton);
+
+                        submitButton.addActionListener(new ActionListener() {
+                            @Override
+                            public void actionPerformed(ActionEvent e) {
+                                String newReOrderValue = newTriggerValue.getText();
+
+                                try {
+                                    int newTotal = Integer.parseInt(newReOrderValue);
+
+                                    if (newTotal < 0) {
+                                        JOptionPane.showMessageDialog(frame, "Invalid input. Received amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                        return;
+                                    }
+
+                                    updatedReOrderMap.put(itemCode, newTotal);
+
+                                    frame.dispose();
+                                    latch.countDown();
+
+                                } catch (NumberFormatException ex) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a valid integer.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                }
+                            }
+                        });
+
+                        frame.setLocationRelativeTo(null);
+                        frame.setVisible(true);
+
+                        try {
+                            latch.await();
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+
+                    for (Map.Entry<String, Integer> entry : updatedReOrderMap.entrySet()) {
+
+                        String item = entry.getKey();
+                        int newTrigger = entry.getValue();
+
+
+                        String updateOnDock = "UPDATE Inventory SET `ReOrder Trigger` = ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnDock)) {
+                            preparedStatement.setInt(1, newTrigger); // Subtract amountReceived
+                            preparedStatement.setString(2, item); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                                "VALUES (?, ?, ?, ?, ?)";
+                        try (PreparedStatement movementStatement = connection.prepareStatement(updateMovements)) {
+                            movementStatement.setString(1, item);
+                            movementStatement.setString(2, " ");
+                            movementStatement.setString(3, "UPDATED TRIGGER");
+                            movementStatement.setString(4, user.getUsername());
+                            movementStatement.setString(5, new dateTime().formattedDateTime());
+                            movementStatement.executeUpdate();
+                        }
+
+
+                        JOptionPane.showMessageDialog(null, "Update Successful");
+                    }
+
+                }
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+
+        else {
+            JOptionPane.showMessageDialog(null, "You do not have access to this feature");
+        }
+    }
+
+
+
+
+
+    public void writeOffStock(User user, Connection connection) throws SQLException {
+
+        boolean adminRights = user.hasAdminRights();
+
+        if (adminRights) {
+            String itemCode = JOptionPane.showInputDialog("Please enter the item code you would like to write off: ");
+
+            if (itemCode == null) {
+                return;
+
+            }
+
+            if (itemCode.isEmpty()) {
+                JOptionPane.showMessageDialog(null, "Reference number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            HashMap<String, Integer> resultMap = new HashMap<>();
+            String query = "SELECT Stock FROM Inventory WHERE `Item Code` = ?";
+
+            try (PreparedStatement checkOrder = connection.prepareStatement(query)) {
+                checkOrder.setString(1, itemCode);
+
+                try (ResultSet rs = checkOrder.executeQuery()) {
+                    while (rs.next()) {
+                        int currentStock = rs.getInt("Stock");
+                        resultMap.put(itemCode, currentStock);
+                    }
+
+                    if (resultMap.isEmpty()) {
+                        JOptionPane.showMessageDialog(null, "Item not found.", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+
+                    HashMap<String, Integer> writeOffMap = new HashMap<>();
+
+                    for (Map.Entry<String, Integer> entry : resultMap.entrySet()) {
+                        CountDownLatch latch = new CountDownLatch(1);
+
+                        String stockCount = entry.getKey();
+                        int writeOffAmount = entry.getValue();
+                        String formattedText = String.format("%s - Current Stock: %d        Write Off:", stockCount, writeOffAmount);
+
+
+                        JFrame frame = new JFrame(itemCode);
+                        frame.setSize(350, 115);
+                        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                        frame.setLayout(null);
+
+                        JLabel currentAmount = new JLabel(formattedText);
+                        currentAmount.setBounds(10, 10, 250, 25);
+                        frame.add(currentAmount);
+
+                        JTextField writeOff = new JTextField(20);
+                        writeOff.setBounds(250, 10, 80, 25);
+                        frame.add(writeOff);
+
+                        JButton submitButton = new JButton("Submit");
+                        submitButton.setBounds(250, 40, 80, 25);
+                        frame.add(submitButton);
+
+                        submitButton.addActionListener(new ActionListener() {
+                            @Override
+                            public void actionPerformed(ActionEvent e) {
+                                String writeOffTotal = writeOff.getText();
+
+                                try {
+                                    int newTotal = Integer.parseInt(writeOffTotal);
+
+                                    if (newTotal < 0) {
+                                        JOptionPane.showMessageDialog(frame, "Invalid input. Received amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                        return;
+                                    }
+
+                                    writeOffMap.put(itemCode, newTotal);
+
+                                    frame.dispose();
+                                    latch.countDown();
+
+                                } catch (NumberFormatException ex) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a valid integer.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                }
+                            }
+                        });
+
+                        frame.setLocationRelativeTo(null);
+                        frame.setVisible(true);
+
+                        try {
+                            latch.await();
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+
+                    for (Map.Entry<String, Integer> entry : writeOffMap.entrySet()) {
+
+                        String item = entry.getKey();
+                        int amountToWriteOff = entry.getValue();
+
+
+                        String newWriteOff = "UPDATE Inventory SET `Written Off` = `Written Off` + ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(newWriteOff)) {
+                            preparedStatement.setInt(1, amountToWriteOff); // Subtract amountReceived
+                            preparedStatement.setString(2, item); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String newProfit = "UPDATE Inventory SET Profit = Profit - `Purchase Price` * ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(newProfit)) {
+                            preparedStatement.setInt(1, amountToWriteOff); // Match reference number
+                            preparedStatement.setString(2, item); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String newStockCount = "UPDATE Inventory SET Stock = Stock - ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(newStockCount)) {
+                            preparedStatement.setInt(1, amountToWriteOff); // Subtract amountReceived
+                            preparedStatement.setString(2, item); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                                "VALUES (?, ?, ?, ?, ?)";
+                        try (PreparedStatement movementStatement = connection.prepareStatement(updateMovements)) {
+                            movementStatement.setString(1, item);
+                            movementStatement.setString(2, String.valueOf(amountToWriteOff));
+                            movementStatement.setString(3, "WRITE OFF");
+                            movementStatement.setString(4, user.getUsername());
+                            movementStatement.setString(5, new dateTime().formattedDateTime());
+                            movementStatement.executeUpdate();
+                        }
+
+
+                        JOptionPane.showMessageDialog(null, "Update Successful");
+                    }
+
+                }
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+
+        else {
+            JOptionPane.showMessageDialog(null, "You do not have access to this feature");
+        }
+    }
+
+
+
+
+    public void generateSale(User user, Connection connection) {
+
+        dateTime formattedDateTimeInstance = new dateTime();
+        String formattedDateTime = formattedDateTimeInstance.formattedDateTime();
+
+            String referenceNumber = UUID.randomUUID().toString().substring(0, 8).toUpperCase();;
+
+            HashMap<String, Integer> saleItemMap = new HashMap<>();
+
+            while (true) {
+                boolean inStock = true;
+                int availableStock = 0;
+
+                String itemCode = JOptionPane.showInputDialog("Enter the item code:");
+
+                if (itemCode == null) {
+                    break;
+                }
+
+                String query = "SELECT `Stock` FROM inventory WHERE `Item Code` = ?";
+                try (PreparedStatement checkForDuplicate = connection.prepareStatement(query)) {
+                    checkForDuplicate.setString(1, itemCode);
+                    ResultSet rs = checkForDuplicate.executeQuery();
+
+                    try {
+                        if (rs.next()) {
+                            availableStock = rs.getInt("Stock");
+                            if (availableStock <= 0) {
+                                JOptionPane.showMessageDialog(null, "Item is out of stock", "Out of Stock", JOptionPane.WARNING_MESSAGE);
+                                inStock = false;
+                            }
+                        }
+                    } catch (SQLException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                } catch (SQLException ex) {
+                    throw new RuntimeException(ex);
+                }
+
+                if (inStock) {
+                    // Prompt for quantity
+                    String quantityStr = JOptionPane.showInputDialog("Enter the quantity:");
+                    if (quantityStr == null) {
+                        break;
+                    }
+
+                    int quantity;
+                    try {
+                        quantity = Integer.parseInt(quantityStr);
+                        if (quantity <= 0) {
+                            JOptionPane.showMessageDialog(null, "Please enter a valid positive quantity.");
+                            continue;
+                        }
+
+                        if (quantity > availableStock) {
+                            JOptionPane.showMessageDialog(null, "Do not have enough stock");
+                            continue;
+                        }
+
+                    } catch (NumberFormatException e) {
+                        JOptionPane.showMessageDialog(null, "Invalid quantity. Please enter a number.");
+                        continue;
+                    }
+
+                    // Add item and quantity to the map
+                    saleItemMap.put(itemCode, quantity);
+
+
+                    // Ask if the user wants to add another item
+                    int response = JOptionPane.showConfirmDialog(null, "Would you like to add another item?", "Add Another Item", JOptionPane.YES_NO_OPTION);
+                    if (response == JOptionPane.NO_OPTION) {
+                        break;
+                    }
+                }
+            }
+
+
+            for (String itemCode : saleItemMap.keySet()) {
+                int amount = saleItemMap.get(itemCode);
+
+
+                double purchasePrice = 0.0;
+                double salePrice = 0.0;
+                String itemName = "";
+
+                // Fetch Item Name, Purchase Price, and Sale Price in one query
+                String fetchItemDetailsQuery = "SELECT `Item Name`, `Purchase Price`, `Sale Price` FROM inventory WHERE `Item Code` = ?";
+                try (PreparedStatement fetchItemDetailsStmt = connection.prepareStatement(fetchItemDetailsQuery)) {
+                    fetchItemDetailsStmt.setString(1, itemCode);
+                    ResultSet rs = fetchItemDetailsStmt.executeQuery();
+                    if (rs.next()) {
+                        itemName = rs.getString("Item Name");
+                        purchasePrice = rs.getDouble("Purchase Price");
+                        salePrice = rs.getDouble("Sale Price");
+                    } else {
+                        JOptionPane.showMessageDialog(null, "Item not found in inventory.", "Error", JOptionPane.ERROR_MESSAGE);
+                        continue;
+                    }
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(null, "Database error when fetching item details: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+
+
+                try {
+                    String insertPendingOrderQuery = "INSERT INTO sales (`Item Code`, `Item Name`, `Amount`, `Total Price`, `Reference`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?, ?)";
+                    try (PreparedStatement insertPendingOrderStmt = connection.prepareStatement(insertPendingOrderQuery)) {
+                        insertPendingOrderStmt.setString(1, itemCode);
+                        insertPendingOrderStmt.setString(2, itemName);
+                        insertPendingOrderStmt.setInt(3, amount);
+                        insertPendingOrderStmt.setDouble(4, salePrice * amount);
+                        insertPendingOrderStmt.setString(5, referenceNumber);
+                        insertPendingOrderStmt.setString(6, user.getUsername());
+                        insertPendingOrderStmt.setString(7, formattedDateTime);
+                        insertPendingOrderStmt.executeUpdate();
+                    }
+
+                    String updateInventoryQuery = "UPDATE inventory SET `Stock` = `Stock` - ? WHERE `Item Code` = ?";
+                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateInventoryQuery)) {
+                        updateInventoryStmt.setInt(1, amount);
+                        updateInventoryStmt.setString(2, itemCode);
+                        updateInventoryStmt.executeUpdate();
+                    }
+
+                    String updateAmountSoldQuery = "UPDATE inventory SET `Amount Sold` = `Amount Sold` + ? WHERE `Item Code` = ?";
+                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateAmountSoldQuery)) {
+                        updateInventoryStmt.setInt(1, amount);
+                        updateInventoryStmt.setString(2, itemCode);
+                        updateInventoryStmt.executeUpdate();
+                    }
+
+                    String updateProfitQuery = "UPDATE inventory SET `Profit` = Profit + ? WHERE `Item Code` = ?";
+                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateProfitQuery)) {
+                        updateInventoryStmt.setDouble(1, (salePrice - purchasePrice) * amount);
+                        updateInventoryStmt.setString(2, itemCode);
+                        updateInventoryStmt.executeUpdate();
+                    }
+
+                    String insertMovementQuery = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) VALUES (?, ?, ?, ?, ?)";
+                    try (PreparedStatement insertMovementStmt = connection.prepareStatement(insertMovementQuery)) {
+                        insertMovementStmt.setString(1, itemCode);
+                        insertMovementStmt.setInt(2, amount);
+                        insertMovementStmt.setString(3, "SALE");
+                        insertMovementStmt.setString(4, user.getUsername());
+                        insertMovementStmt.setString(5, formattedDateTime);
+                        insertMovementStmt.executeUpdate();
+                    }
+
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(null, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            }
+
+            JOptionPane.showMessageDialog(null, "Purchase order created successfully with reference number: " + referenceNumber);
+
+    }
+
+
+
+
+    public void viewSalesTransactions(Connection connection) throws SQLException {
+        JDialog dialog = new JDialog((JFrame) null, "Sales Transactions", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setSize(800, 400);
+        dialog.setLocationRelativeTo(null);
+
+        // Column headings
+        String[] columnNames = {"Item Code", "Item Name", "Amount", "Total Price", "Reference", "User", "Date"};
+        DefaultTableModel tableModel = new DefaultTableModel(columnNames, 0);
+        JTable table = new JTable(tableModel);
+
+        // Add a row sorter for filtering
+        TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(tableModel);
+        table.setRowSorter(sorter);
+
+        // Create a filter panel
+        JPanel filterPanel = new JPanel(new GridLayout(1, columnNames.length));
+        JTextField[] filterFields = new JTextField[columnNames.length];
+
+        for (int i = 0; i < columnNames.length; i++) {
+            filterFields[i] = new JTextField();
+            final int columnIndex = i;
+            filterFields[i].addCaretListener(e -> {
+                String filterText = filterFields[columnIndex].getText();
+                if (filterText.trim().isEmpty()) {
+                    sorter.setRowFilter(null);
+                } else {
+                    sorter.setRowFilter(RowFilter.regexFilter("(?i)" + filterText, columnIndex));
+                }
+            });
+            filterPanel.add(filterFields[i]);
+        }
+
+        // Query to fetch sales data
+        String query = "SELECT sales.`Item Code`, " +
+                "COALESCE(inventory.`Item Name`, 'N/A') AS `Item Name`, " +
+                "sales.`Amount`, " +
+                "sales.`Total Price`, " +
+                "sales.`Reference`, " +
+                "sales.`User`, " +
+                "sales.`Date` " +
+                "FROM sales " +
+                "LEFT JOIN inventory ON sales.`Item Code` = inventory.`Item Code`";
+
+        // Fetch and populate table data
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+            while (rs.next()) {
+                Object[] rowData = {
+                        rs.getString("Item Code"),
+                        rs.getString("Item Name"),
+                        rs.getInt("Amount"),
+                        rs.getDouble("Total Price"),
+                        rs.getString("Reference"),
+                        rs.getString("User"),
+                        rs.getString("Date")
+                };
+                tableModel.addRow(rowData);
+            }
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(dialog, "Error loading sales transactions: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            dialog.dispose();
+            return;
+        }
+
+        // Add components to the dialog
+        dialog.setLayout(new BorderLayout());
+        dialog.add(filterPanel, BorderLayout.SOUTH);
+        dialog.add(new JScrollPane(table), BorderLayout.CENTER);
+        dialog.setVisible(true);
+    }
+
+
+
+    public void returnOrder(User user, Connection connection) throws SQLException {
+        String referenceNumber = JOptionPane.showInputDialog("Enter sale number: ");
+
+        if (referenceNumber == null) {
+            return;
+
+        }
+
+        if (referenceNumber.isEmpty()) {
+            JOptionPane.showMessageDialog(null, "sale number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        HashMap<String, Integer> resultMap = new HashMap<>();
+        String query = "SELECT `Item Code`, Amount FROM sales WHERE `Reference` = ?";
+
+        try (PreparedStatement checkOrder = connection.prepareStatement(query)) {
+            checkOrder.setString(1, referenceNumber);
+
+            try (ResultSet rs2 = checkOrder.executeQuery()) {
+                while (rs2.next()) {
+                    String itemCode = rs2.getString("Item Code");
+                    int amount = rs2.getInt("Amount");
+                    resultMap.put(itemCode, amount);
+                }
+
+                if (resultMap.isEmpty()) {
+                    JOptionPane.showMessageDialog(null, "No orders found for the given reference number.", "No Results", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+
+                HashMap<String, Integer> receivedMap = new HashMap<>();
+
+                for (Map.Entry<String, Integer> entry : resultMap.entrySet()) {
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    String codeOrdered = entry.getKey();
+                    int amountOrdered = entry.getValue();
+                    String formattedString = String.format("%s - Amount on Order: %d           returning:", codeOrdered, amountOrdered);
+
+
+                    JFrame frame = new JFrame(codeOrdered);
+                    frame.setSize(350, 115);
+                    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                    frame.setLayout(null);
+
+                    JLabel amountLabel = new JLabel(formattedString);
+                    amountLabel.setBounds(10, 10, 250, 25);
+                    frame.add(amountLabel);
+
+                    JTextField amountReceived = new JTextField(20);
+                    amountReceived.setBounds(250, 10, 80, 25);
+                    frame.add(amountReceived);
+
+                    JButton submitButton = new JButton("Submit");
+                    submitButton.setBounds(250, 40, 80, 25);
+                    frame.add(submitButton);
+
+                    submitButton.addActionListener(new ActionListener() {
+                        @Override
+                        public void actionPerformed(ActionEvent e) {
+                            String receivedAmountString = amountReceived.getText();
+
+                            try {
+                                int returnedAmount = Integer.parseInt(receivedAmountString);
+
+
+                                if (amountOrdered - returnedAmount < 0) {
+                                    JOptionPane.showMessageDialog(frame, "Invalid input. returned amount cannot exceed the amount ordered.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                    return;
+                                }
+
+
+                                receivedMap.put(codeOrdered, returnedAmount);
+
+                                frame.dispose();
+                                latch.countDown();
+
+                            } catch (NumberFormatException ex) {
+                                JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a valid integer.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                            }
+                        }
+                    });
+
+                    frame.setLocationRelativeTo(null);
+                    frame.setVisible(true);
+
+                    try {
+                        latch.await();
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                for (Map.Entry<String, Integer> entry : receivedMap.entrySet()) {
+
+                    String codeReceived = entry.getKey();
+                    int amountReceived = entry.getValue();
+
+                    double purchasePrice = 0.0;
+                    double salePrice = 0.0;
+
+                    // Fetch Item Name, Purchase Price, and Sale Price in one query
+                    String fetchItemDetailsQuery = "SELECT `Item Name`, `Purchase Price`, `Sale Price` FROM inventory WHERE `Item Code` = ?";
+                    try (PreparedStatement fetchItemDetailsStmt = connection.prepareStatement(fetchItemDetailsQuery)) {
+                        fetchItemDetailsStmt.setString(1, codeReceived);
+                        ResultSet rs = fetchItemDetailsStmt.executeQuery();
+                        if (rs.next()) {
+                            purchasePrice = rs.getDouble("Purchase Price");
+                            salePrice = rs.getDouble("Sale Price");
+                        } else {
+                            JOptionPane.showMessageDialog(null, "Item not found in inventory.", "Error", JOptionPane.ERROR_MESSAGE);
+                            continue;
+                        }
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(null, "Database error when fetching item details: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+
+                    if (amountReceived > 0) {
+                        String updateReceivingLog = "UPDATE sales SET Amount = Amount - ? WHERE `Reference` = ? AND `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateReceivingLog)) {
+                            preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                            preparedStatement.setString(2, referenceNumber); // Match reference number
+                            preparedStatement.setString(3, codeReceived); // Match item code
+                            preparedStatement.executeUpdate();
+                        }
+
+                        String updateOnOrder = "UPDATE Inventory SET `Amount Sold` = `Amount Sold` - ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnOrder)) {
+                            preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                            preparedStatement.setString(2, codeReceived); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String updateOnDock = "UPDATE Inventory SET `Stock` = `Stock` + ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnDock)) {
+                            preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
+                            preparedStatement.setString(2, codeReceived); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String updateProfit = "UPDATE Inventory SET `Profit` = `Profit` - ? WHERE `Item Code` = ?";
+                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateProfit)) {
+                            preparedStatement.setDouble(1, (salePrice - purchasePrice) * amountReceived); // Subtract amountReceived
+                            preparedStatement.setString(2, codeReceived); // Match reference number
+                            preparedStatement.executeUpdate();
+
+                        }
+
+                        String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
+                                "VALUES (?, ?, ?, ?, ?)";
+                        try (PreparedStatement movementStatement = connection.prepareStatement(updateMovements)) {
+                            movementStatement.setString(1, codeReceived);
+                            movementStatement.setString(2, String.valueOf(amountReceived));
+                            movementStatement.setString(3, "RETURN");
+                            movementStatement.setString(4, user.getUsername());
+                            movementStatement.setString(5, new dateTime().formattedDateTime());
+                            movementStatement.executeUpdate();
+                        }
+
+                    }
+
+                    String deleteCompletedOrder = "DELETE FROM sales WHERE `Reference` = ? AND `Item Code` = ? AND Amount = 0";
+                    try (PreparedStatement deleteStatement = connection.prepareStatement(deleteCompletedOrder)) {
+                        deleteStatement.setString(1, referenceNumber); // Match reference number
+                        deleteStatement.setString(2, codeReceived); // Match item code
+                        deleteStatement.executeUpdate();
+                    }
+                }
+
+                JOptionPane.showMessageDialog(null, "Items Received!");
+            }
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
 }
 

@@ -62,6 +62,36 @@ public class postLogin {
                         lowStockCheck.lowStockCheck(connection);
                         break;
 
+                    case 8:
+
+                        menuFunctions adjustReOrderTrigger = new menuFunctions();
+                        adjustReOrderTrigger.adjustReOrderTrigger(user, connection);
+                        break;
+
+                    case 9:
+
+                        menuFunctions writeOffStock = new menuFunctions();
+                        writeOffStock.writeOffStock(user, connection);
+                        break;
+
+                    case 10:
+
+                        menuFunctions generateSale = new menuFunctions();
+                        generateSale.generateSale(user, connection);
+                        break;
+
+                    case 11:
+
+                        menuFunctions viewSalesTransactions = new menuFunctions();
+                        viewSalesTransactions.viewSalesTransactions(connection);
+                        break;
+
+                    case 12:
+
+                        menuFunctions returnOrder = new menuFunctions();
+                        returnOrder.returnOrder(user, connection);
+                        break;
+
 
                     case 13:
                         menuFunctions passwordReset = new menuFunctions();

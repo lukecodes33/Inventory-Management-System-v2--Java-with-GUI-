@@ -3,12 +3,7 @@ import java.io.File;
 import java.sql.*;
 import java.util.Map;
 
-//To Do List
-// addITem application closes on window close, currently have set to system exit on close but
-// would like it to just return to old window and remove back button
-//
-//Add hashing and salting to password
-
+//Write off lets value go below 0
 
 /**
  * Main method that handles the login process and updates the login history.
