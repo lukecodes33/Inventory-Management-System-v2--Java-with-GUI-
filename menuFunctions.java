@@ -1095,7 +1095,44 @@ public class menuFunctions {
 
 
 
-
+    /**
+     * Adjusts the reorder trigger level for an inventory item, accessible only to admin users.
+     * <p>
+     * This method checks if the user has admin rights and provides a graphical interface to update the
+     * "ReOrder Trigger" value of a specific item in the inventory. It retrieves the current value from the
+     * `Inventory` database and displays it in a JFrame, allowing the user to input a new trigger value.
+     * The method validates the input to ensure it is a non-negative integer, updates the value in the database,
+     * and logs the action in the `movements` table.
+     * <p>
+     * If the specified item code does not exist in the database, an error message is displayed. The operation
+     * ensures the use of parameterized queries to prevent SQL injection and maintain data integrity.
+     *
+     * @param user       The current user, whose admin rights are verified before granting access to this feature.
+     *                   The user's username is also logged in the `movements` database.
+     * @param connection A valid database connection used to interact with the `Inventory` and `movements` tables.
+     * @throws SQLException if a database access error occurs
+     *
+     * Workflow:
+     * - Validate that the user has admin rights.
+     * - Prompt the user to input an item code and fetch its current "ReOrder Trigger" value.
+     * - Display the current trigger value in a GUI and allow the user to input a new value.
+     * - Validate the new value (must be a non-negative integer).
+     * - Update the `ReOrder Trigger` value in the `Inventory` database.
+     * - Log the update action in the `movements` database with the username, item code, and timestamp.
+     * - Display success or error messages to the user as appropriate.
+     *
+     * Database Tables Involved:
+     * - `Inventory`: Stores the "ReOrder Trigger" value for items.
+     * - `movements`: Logs updates to the inventory for auditing purposes.
+     *
+     * Error Handling:
+     * - Displays error messages for invalid input, non-existent item codes, or database access issues.
+     * - Ensures robust handling of exceptions to prevent crashes.
+     *
+     * Security:
+     * - Access restricted to admin users.
+     * - Parameterized queries are used to prevent SQL injection attacks.
+     */
 
     public void adjustReOrderTrigger(User user, Connection connection) throws SQLException {
 
@@ -1234,8 +1271,45 @@ public class menuFunctions {
 
 
 
-
-
+    /**
+     * Processes the write-off of stock items in the inventory, restricted to admin users.
+     * <p>
+     * This method allows an admin user to write off a specified quantity of stock for an inventory item.
+     * The method verifies user permissions, retrieves the current stock level from the `Inventory` database,
+     * and displays a graphical interface for entering the quantity to write off. The write-off amount is validated
+     * to ensure it is a non-negative integer. The stock, written-off quantity, and profit are updated in the
+     * database accordingly, and the action is logged in the `movements` table.
+     *
+     * @param user       The current user, whose admin rights are verified and username logged in the `movements` table.
+     * @param connection A valid database connection used to interact with the `Inventory` and `movements` tables.
+     * @throws SQLException if a database access error occurs
+     *
+     * Workflow:
+     * - Validate that the user has admin rights.
+     * - Prompt the user to input an item code and fetch its current stock level.
+     * - Display the current stock level in a GUI and allow the user to input the write-off quantity.
+     * - Validate the write-off quantity (must be a non-negative integer).
+     * - Update the `Written Off`, `Profit`, and `Stock` fields in the `Inventory` database for the specified item.
+     * - Log the write-off action in the `movements` database with the username, item code, and timestamp.
+     * - Provide success or error messages to the user as appropriate.
+     *
+     * Database Tables Involved:
+     * - `Inventory`: Updates the stock, written-off quantity, and profit for the specified item.
+     * - `movements`: Logs the write-off operation for auditing and tracking purposes.
+     *
+     * Error Handling:
+     * - Displays error messages for invalid inputs, non-existent item codes, or database access issues.
+     * - Ensures robust handling of exceptions to prevent crashes or data inconsistencies.
+     *
+     * Security:
+     * - Access restricted to admin users.
+     * - Parameterized queries are used to prevent SQL injection attacks.
+     *
+     * GUI:
+     * - A JFrame interface is used to display the current stock level and accept the write-off quantity.
+     * - Contains a text field for input and a button to submit the new value.
+     * - Uses a CountDownLatch to ensure the GUI interaction completes before proceeding with updates.
+     */
     public void writeOffStock(User user, Connection connection) throws SQLException {
 
         boolean adminRights = user.hasAdminRights();
@@ -1388,8 +1462,49 @@ public class menuFunctions {
     }
 
 
-
-
+    /**
+     * Generates a sale transaction, allowing a user to select items, specify quantities, and update the database.
+     * <p>
+     * This method enables the creation of a sale order by prompting the user to input item codes and quantities
+     * for the sale. It validates stock availability and records the sale details in the `sales` table, adjusts
+     * inventory levels, and logs the transaction in the `movements` table. A unique reference number is generated
+     * for each sale transaction.
+     *
+     * @param user       The current user, whose username is logged as the originator of the transaction.
+     * @param connection A valid database connection used to interact with the `inventory`, `sales`, and `movements` tables.
+     *
+     * Workflow:
+     * - Generate a unique reference number for the sale.
+     * - Prompt the user to input item codes and validate stock availability.
+     * - Allow the user to input quantities for the sale, ensuring they do not exceed available stock.
+     * - Retrieve item details such as name, purchase price, and sale price for each item.
+     * - Record the sale details in the `sales` table, including the reference number and total price.
+     * - Update the `inventory` table to adjust stock levels, amount sold, and profit.
+     * - Log the sale transaction in the `movements` table with the item, amount, and timestamp.
+     * - Display a confirmation message with the reference number upon successful completion.
+     *
+     * Database Tables Involved:
+     * - `inventory`: Stores item stock levels, amount sold, and profit.
+     * - `sales`: Records details of the sale, including item code, name, quantity, total price, reference number, user, and date.
+     * - `movements`: Logs the sale for tracking and auditing purposes.
+     *
+     * Error Handling:
+     * - Ensures all database operations are performed using parameterized queries to prevent SQL injection.
+     * - Displays error messages for invalid inputs, stock unavailability, or database access issues.
+     * - Gracefully handles interruptions or exceptions to prevent data inconsistencies.
+     *
+     * Security:
+     * - Uses parameterized queries for all database interactions.
+     * - Ensures proper handling of database resources with try-with-resources blocks.
+     *
+     * GUI:
+     * - Uses dialog boxes (via `JOptionPane`) to interact with the user for item codes, quantities, and confirmation.
+     * - Displays error messages for invalid inputs and successful messages for completed transactions.
+     *
+     * Note:
+     * - This method assumes the `dateTime` class provides a `formattedDateTime` method that returns the current timestamp.
+     * - Ensure the database connection is properly established before invoking this method.
+     */
     public void generateSale(User user, Connection connection) {
 
         dateTime formattedDateTimeInstance = new dateTime();
@@ -1550,7 +1665,44 @@ public class menuFunctions {
 
 
 
-
+    /**
+     * Displays a table of sales transactions with filtering options for each column.
+     * <p>
+     * This method fetches sales transaction data from the `sales` database table, joins it with the `inventory`
+     * table to retrieve item names, and displays the data in a graphical interface. Users can filter the table
+     * data dynamically using text fields for each column.
+     *
+     * @param connection A valid database connection used to retrieve data from the `sales` and `inventory` tables.
+     * @throws SQLException if a database access error occurs
+     *
+     * Workflow:
+     * - Create a modal dialog to display sales transactions in a table.
+     * - Set up column headers and a table model to hold the data.
+     * - Add a row sorter for filtering and create text fields for filtering each column.
+     * - Execute an SQL query to fetch sales transaction data and populate the table.
+     * - Display the dialog with the table and filtering options.
+     *
+     * Database Tables Involved:
+     * - `sales`: Provides transaction details such as item code, amount, total price, reference, user, and date.
+     * - `inventory`: Used to fetch item names corresponding to item codes in the `sales` table.
+     *
+     * GUI:
+     * - Displays the sales transactions in a JTable within a modal JDialog.
+     * - Includes a filter panel with text fields for each column, allowing dynamic filtering of rows.
+     * - Supports case-insensitive filtering for user convenience.
+     *
+     * Error Handling:
+     * - If a database error occurs during data retrieval, an error message is displayed, and the dialog closes.
+     * - Ensures robust handling of SQL exceptions with try-with-resources for database queries.
+     *
+     * Security:
+     * - Uses parameterized queries to prevent SQL injection (for future extensions involving user-provided input).
+     *
+     * Notes:
+     * - The dialog is modal, ensuring the user must close it before returning to the main application.
+     * - The method assumes the database schema aligns with the SQL query provided.
+     * - This method is read-only and does not modify the database.
+     */
     public void viewSalesTransactions(Connection connection) throws SQLException {
         JDialog dialog = new JDialog((JFrame) null, "Sales Transactions", true);
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -1624,6 +1776,49 @@ public class menuFunctions {
     }
 
 
+    /**
+     * Processes the return of items from a sales order and updates the inventory and sales records accordingly.
+     * <p>
+     * This method allows a user to return items associated with a specific sales reference number. The user is prompted
+     * to input the sales reference number, and the method retrieves the relevant sales data. A graphical interface
+     * is used to specify the quantity of each item being returned. The database is then updated to reflect the returned
+     * items, including adjustments to sales records, inventory stock, and profit.
+     *
+     * @param user       The current user, whose username is logged in the `movements` table as the action's originator.
+     * @param connection A valid database connection used to interact with the `sales`, `inventory`, and `movements` tables.
+     * @throws SQLException if a database access error occurs
+     *
+     * Workflow:
+     * - Prompt the user to input a sales reference number.
+     * - Fetch the associated items and quantities from the `sales` table.
+     * - Display a graphical interface for each item, allowing the user to input the quantity being returned.
+     * - Validate the returned quantity to ensure it does not exceed the original sold amount.
+     * - Update the `sales` table to reflect the reduced amount for each returned item.
+     * - Adjust the `inventory` table to increase stock and decrement the `Amount Sold` and `Profit` values.
+     * - Log the return operation in the `movements` table with the item code, returned quantity, and user details.
+     * - Remove any completed sales records (where the amount sold becomes zero).
+     *
+     * Database Tables Involved:
+     * - `sales`: Updates the `Amount` field to reflect the returned quantity and deletes completed orders.
+     * - `inventory`: Updates stock, amount sold, and profit for returned items.
+     * - `movements`: Logs the return transaction for tracking and auditing purposes.
+     *
+     * GUI:
+     * - Displays a JFrame for each item, showing the current amount sold and allowing the user to input the return quantity.
+     * - Includes input validation to prevent invalid or excessive return amounts.
+     *
+     * Error Handling:
+     * - Displays error messages for invalid inputs, missing reference numbers, or database access issues.
+     * - Ensures robust handling of SQL exceptions with try-with-resources for all database queries.
+     *
+     * Security:
+     * - Uses parameterized queries to prevent SQL injection attacks.
+     *
+     * Notes:
+     * - The method assumes the `dateTime` class provides a `formattedDateTime` method for generating timestamps.
+     * - The method ensures the database remains consistent even in the event of partial failures.
+     * - Users cannot return more items than were originally sold for the given reference number.
+     */
 
     public void returnOrder(User user, Connection connection) throws SQLException {
         String referenceNumber = JOptionPane.showInputDialog("Enter sale number: ");
