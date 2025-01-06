@@ -1204,7 +1204,7 @@ public class menuFunctions {
                                     int newTotal = Integer.parseInt(newReOrderValue);
 
                                     if (newTotal < 0) {
-                                        JOptionPane.showMessageDialog(frame, "Invalid input. Received amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                        JOptionPane.showMessageDialog(frame, "Invalid input. Re Order amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
                                         return;
                                     }
 
@@ -1380,7 +1380,7 @@ public class menuFunctions {
                                     int newTotal = Integer.parseInt(writeOffTotal);
 
                                     if (newTotal < 0) {
-                                        JOptionPane.showMessageDialog(frame, "Invalid input. Received amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                                        JOptionPane.showMessageDialog(frame, "Invalid input. Write off amount must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
                                         return;
                                     }
 
@@ -1821,7 +1821,7 @@ public class menuFunctions {
      */
 
     public void returnOrder(User user, Connection connection) throws SQLException {
-        String referenceNumber = JOptionPane.showInputDialog("Enter sale number: ");
+        String referenceNumber = JOptionPane.showInputDialog("Enter transaction number: ");
 
         if (referenceNumber == null) {
             return;
@@ -1829,7 +1829,7 @@ public class menuFunctions {
         }
 
         if (referenceNumber.isEmpty()) {
-            JOptionPane.showMessageDialog(null, "sale number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(null, "transaction number cannot be empty.", "Input Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
