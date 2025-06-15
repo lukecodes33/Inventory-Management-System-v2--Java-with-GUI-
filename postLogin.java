@@ -1,4 +1,5 @@
 import javax.swing.*;
+import java.awt.*;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -111,55 +112,72 @@ public class postLogin {
     }
 
     private static int showMainMenu(User user) {
-        // Create a panel to hold the message and title
+        // Create a panel with a vertical layout
         JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS)); // Use vertical box layout
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 
-        // Create and center the title label
-        JLabel titleLabel = new JLabel("Inventory Management System");
-        titleLabel.setAlignmentX(JComponent.CENTER_ALIGNMENT);
-        titleLabel.setFont(titleLabel.getFont().deriveFont(16f)); // Optionally, increase font size
+        // Create title label
+        JLabel titleLabel = new JLabel("Inventory Management System", SwingConstants.CENTER);
+        titleLabel.setFont(titleLabel.getFont().deriveFont(16f));
 
-        // Create and center the message label
-        JLabel messageLabel = new JLabel("User: " + user.getUsername());
-        messageLabel.setAlignmentX(JComponent.CENTER_ALIGNMENT);
+        // User label
+        JLabel messageLabel = new JLabel("User: " + user.getUsername(), SwingConstants.CENTER);
 
-        // Add the labels to the panel
+        // Centering labels
+        titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        messageLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        // Add labels
         panel.add(titleLabel);
-        panel.add(Box.createVerticalStrut(10)); // Add some space between title and message
+        panel.add(Box.createVerticalStrut(10)); // Add spacing
         panel.add(messageLabel);
+        panel.add(Box.createVerticalStrut(10));
 
-        // Create options for the dialog
+        // Button options
         String[] options = {
-                "Add Item",
-                "View Items",
-                "Create Purchase Order",
-                "View Pending Orders",
-                "Receive Order",
-                "Put-away Stock",
-                "Low Stock Check",
-                "Change Re Order Triggers",
-                "Write Off Stock",
-                "Process Sale",
-                "View Transaction",
-                "Return Item",
-                "Reset Password",
-                "Log Out"
+                "Add Item", "View Items", "Create Purchase Order", "View Pending Orders",
+                "Receive Order", "Put-away Stock", "Low Stock Check", "Change Re Order Triggers",
+                "Write Off Stock", "Process Sale", "View Transaction", "Return Item",
+                "Reset Password", "Log Out"
         };
 
-        // Show option dialog with buttons
-        int choice = JOptionPane.showOptionDialog(
-                null,
-                panel, // Use the custom panel instead of a simple string
-                null, // No custom title for the dialog, the title will be set by JOptionPane
-                JOptionPane.DEFAULT_OPTION,
-                JOptionPane.INFORMATION_MESSAGE,
-                null,
-                options,
-                options[0] // Default selection
-        );
+        // Panel to hold buttons in a grid layout (4 per row)
+        JPanel buttonPanel = new JPanel(new GridLayout(0, 4, 10, 10)); // 4 columns, auto rows
 
-        return choice + 1; // Return 1-based index (Cancel will return 0)
+        JButton[] buttons = new JButton[options.length];
+        int[] choice = {-1}; // Store user's selection
+
+        for (int i = 0; i < options.length; i++) {
+            buttons[i] = new JButton(options[i]);
+            final int index = i + 1; // Store 1-based index
+            buttons[i].addActionListener(e -> {
+                choice[0] = index;
+                SwingUtilities.getWindowAncestor(panel).dispose(); // Close the dialog
+            });
+            buttonPanel.add(buttons[i]);
+        }
+
+        panel.add(buttonPanel);
+
+        // Create a resizable dialog
+        JDialog dialog = new JDialog((Frame) null, "Menu", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.getContentPane().add(panel);
+        dialog.pack();
+        dialog.setSize(600, 400); // Initial size
+        dialog.setLocationRelativeTo(null); // Center on screen
+
+        // Handle window close (X button)
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                choice[0] = 0; // Indicate cancellation (same as pressing "Cancel")
+                dialog.dispose();
+            }
+        });
+
+        dialog.setVisible(true);
+
+        return choice[0]; // Return the user's selection (1-based index or 0 for exit)
     }
-
 }

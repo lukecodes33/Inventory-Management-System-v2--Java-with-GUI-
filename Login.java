@@ -4,6 +4,14 @@ import java.sql.*;
 import java.util.Map;
 
 //Write off lets value go below 0
+//Process sale window creates purchase order code on close
+//input as headers
+//configure the menu to have sections with related buttons
+//Create POWER BI similar dashboard to display data from database
+//encryption needed for passwords
+//Create backup and restore from backup
+//Admin rights = no, display less fields rather than denying access
+// 3NF database and Postgresql
 
 /**
  * Main method that handles the login process and updates the login history.
