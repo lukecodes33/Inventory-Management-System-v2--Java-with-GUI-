@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
+
 public class postLogin {
 
     static void mainMenu(User user) throws SQLException {
@@ -23,86 +24,165 @@ public class postLogin {
 
                     case 1:
 
+                    if (user.hasAdminRights()) {
                         menuFunctions addItem = new menuFunctions();
                         addItem.addItem(user, connection);
                         break;
+                    }
 
-                    case 2:
-
+                    else {
                         menuFunctions searchItems = new menuFunctions();
                         searchItems.viewAllItems(connection);
                         break;
+                    }
 
-                    case 3:
+                    case 2:
 
-                        menuFunctions newPurchaseOrder = new menuFunctions();
-                        newPurchaseOrder.newPurchaseOrder(user, connection);
+                    if (user.hasAdminRights()) {
+                        menuFunctions searchItems = new menuFunctions();
+                        searchItems.viewAllItems(connection);
                         break;
+                    }
 
-                    case 4:
-
+                    else {
                         menuFunctions showPendingOrders = new menuFunctions();
                         showPendingOrders.displayPendingOrders(connection);
                         break;
+                    }
 
-                    case 5:
+                    case 3:
 
+                    if (user.hasAdminRights()) {
+                        menuFunctions newPurchaseOrder = new menuFunctions();
+                        newPurchaseOrder.newPurchaseOrder(user, connection);
+                        break;
+                    }
+
+                    else {
                         menuFunctions receiveOrder = new menuFunctions();
                         receiveOrder.receiveOrder(user, connection);
                         break;
+                    }
 
-                    case 6:
+                    case 4:
+                    
+                    if (user.hasAdminRights()) {
+                        menuFunctions showPendingOrders = new menuFunctions();
+                        showPendingOrders.displayPendingOrders(connection);
+                        break;
+                    }
 
+                    else {
                         menuFunctions putAwayStock = new menuFunctions();
                         putAwayStock.putAwayStock(user, connection);
                         break;
+                    }
 
-                    case 7:
+                    case 5:
+                    if (user.hasAdminRights()) {
+                        menuFunctions receiveOrder = new menuFunctions();
+                        receiveOrder.receiveOrder(user, connection);
+                        break;
+                    }
 
+                    else {
                         menuFunctions lowStockCheck = new menuFunctions();
                         lowStockCheck.lowStockCheck(connection);
+                    }
+
+                    case 6:
+                    if (user.hasAdminRights()) {
+                        menuFunctions putAwayStock = new menuFunctions();
+                        putAwayStock.putAwayStock(user, connection);
                         break;
+                    }
 
-                    case 8:
-
-                        menuFunctions adjustReOrderTrigger = new menuFunctions();
-                        adjustReOrderTrigger.adjustReOrderTrigger(user, connection);
-                        break;
-
-                    case 9:
-
-                        menuFunctions writeOffStock = new menuFunctions();
-                        writeOffStock.writeOffStock(user, connection);
-                        break;
-
-                    case 10:
-
+                    else {
                         menuFunctions generateSale = new menuFunctions();
                         generateSale.generateSale(user, connection);
                         break;
+                    }
 
-                    case 11:
+                    case 7:
+                    if (user.hasAdminRights()) {
+                        menuFunctions lowStockCheck = new menuFunctions();
+                        lowStockCheck.lowStockCheck(connection);
+                        break;
+                    }
 
+                    else {
                         menuFunctions viewSalesTransactions = new menuFunctions();
                         viewSalesTransactions.viewSalesTransactions(connection);
                         break;
 
-                    case 12:
+                    }
 
+                    case 8:
+                    if (user.hasAdminRights()){
+                        menuFunctions adjustReOrderTrigger = new menuFunctions();
+                        adjustReOrderTrigger.adjustReOrderTrigger(user, connection);
+                        break;
+                    }
+                    else {
                         menuFunctions returnOrder = new menuFunctions();
                         returnOrder.returnOrder(user, connection);
                         break;
+                    }
 
-
-                    case 13:
+                    case 9:
+                    if (user.hasAdminRights()){
+                        menuFunctions writeOffStock = new menuFunctions();
+                        writeOffStock.writeOffStock(user, connection);
+                        break;
+                    }
+                    else {
                         menuFunctions passwordReset = new menuFunctions();
                         passwordReset.resetPassword(user);
                         break;
 
-                    case 14:
+                    }
+
+                    case 10:
+                    if (user.hasAdminRights()) {
+                        menuFunctions generateSale = new menuFunctions();
+                        generateSale.generateSale(user, connection);
+                        break;
+                    }
+
+                    else {
                         JOptionPane.showMessageDialog(null, "Goodbye " + user.getUsername());
                         System.exit(0);
                         connection.close();
+                    }
+
+                    case 11:
+                    if (user.hasAdminRights()) {
+                        menuFunctions viewSalesTransactions = new menuFunctions();
+                        viewSalesTransactions.viewSalesTransactions(connection);
+                        break;
+                    }
+
+                    case 12:
+                    if (user.hasAdminRights()) {
+                        menuFunctions returnOrder = new menuFunctions();
+                        returnOrder.returnOrder(user, connection);
+                        break;
+                    }
+
+
+                    case 13:
+                    if (user.hasAdminRights()) {
+                        menuFunctions passwordReset = new menuFunctions();
+                        passwordReset.resetPassword(user);
+                        break;
+                    }
+
+                    case 14:
+                    if (user.hasAdminRights()) {
+                        JOptionPane.showMessageDialog(null, "Goodbye " + user.getUsername());
+                        System.exit(0);
+                        connection.close();
+                    }
 
                     default:
                         System.out.println("Invalid choice. Please try again.");
@@ -129,17 +209,32 @@ public class postLogin {
 
         // Add labels
         panel.add(titleLabel);
-        panel.add(Box.createVerticalStrut(10)); // Add spacing
+        panel.add(Box.createVerticalStrut(10));
         panel.add(messageLabel);
         panel.add(Box.createVerticalStrut(10));
 
-        // Button options
-        String[] options = {
-                "Add Item", "View Items", "Create Purchase Order", "View Pending Orders",
-                "Receive Order", "Put-away Stock", "Low Stock Check", "Change Re Order Triggers",
-                "Write Off Stock", "Process Sale", "View Transaction", "Return Item",
-                "Reset Password", "Log Out"
+        // List created of menu items, will display one or the other depending on if user has admin rights or not.
+        String[] adminOptions = {
+            "Add Item", "View Items", "Create Purchase Order", "View Pending Orders",
+            "Receive Order", "Put-away Stock", "Low Stock Check", "Change Re Order Triggers",
+            "Write Off Stock", "Process Sale", "View Transaction", "Return Item",
+            "Reset Password", "Log Out"
         };
+
+        String[] noAdminOptions = {
+            "View Items", "View Pending Orders",
+            "Receive Order", "Put-away Stock", "Low Stock Check",
+            "Process Sale", "View Transaction", "Return Item",
+            "Reset Password", "Log Out"
+        };
+
+        String[] options;
+        if (user.hasAdminRights()) {
+            options = adminOptions;
+        } else {
+            options = noAdminOptions;
+        }
+
 
         // Panel to hold buttons in a grid layout (4 per row)
         JPanel buttonPanel = new JPanel(new GridLayout(0, 4, 10, 10)); // 4 columns, auto rows

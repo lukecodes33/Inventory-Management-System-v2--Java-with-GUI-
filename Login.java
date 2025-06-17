@@ -10,8 +10,10 @@ import java.util.Map;
 //Create POWER BI similar dashboard to display data from database
 //encryption needed for passwords
 //Create backup and restore from backup
-//Admin rights = no, display less fields rather than denying access
-// 3NF database and Postgresql
+//remove written off, profit, amount sold
+//Add item, swap add and cancel
+// as nonn admin, view all items then launches process sale afterwards.
+
 
 /**
  * Main method that handles the login process and updates the login history.
