@@ -88,6 +88,7 @@ public class postLogin {
                     else {
                         menuFunctions lowStockCheck = new menuFunctions();
                         lowStockCheck.lowStockCheck(connection);
+                        break;
                     }
 
                     case 6:
@@ -178,6 +179,15 @@ public class postLogin {
                     }
 
                     case 14:
+
+                    if (user.hasAdminRights()) {
+                        menuFunctions backup = new menuFunctions();
+                        backup.backUpDatabase();
+                        break;
+                    }
+
+                    case 15:
+
                     if (user.hasAdminRights()) {
                         JOptionPane.showMessageDialog(null, "Goodbye " + user.getUsername());
                         System.exit(0);
@@ -209,7 +219,7 @@ public class postLogin {
 
         // Add labels
         panel.add(titleLabel);
-        panel.add(Box.createVerticalStrut(10));
+        panel.add(Box.createVerticalStrut(10)); 
         panel.add(messageLabel);
         panel.add(Box.createVerticalStrut(10));
 
@@ -218,7 +228,7 @@ public class postLogin {
             "Add Item", "View Items", "Create Purchase Order", "View Pending Orders",
             "Receive Order", "Put-away Stock", "Low Stock Check", "Change Re Order Triggers",
             "Write Off Stock", "Process Sale", "View Transaction", "Return Item",
-            "Reset Password", "Log Out"
+            "Reset Password", "Create Local Backup", "Log Out"
         };
 
         String[] noAdminOptions = {

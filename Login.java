@@ -9,9 +9,8 @@ import java.util.Map;
 //configure the menu to have sections with related buttons
 //Create POWER BI similar dashboard to display data from database
 //encryption needed for passwords
-//Create backup and restore from backup
+//restore from backup
 //Add item, swap add and cancel
-// as nonn admin, view all items then launches process sale afterwards.
 // Can process sale on item not existant
 // REturn item shows item recieved on completion
 // on recieve item, pop up displays * amount of items

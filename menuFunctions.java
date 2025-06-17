@@ -6,6 +6,14 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -1926,6 +1934,60 @@ public class menuFunctions {
             }
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(null, "Database error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * Creates a timestamped backup copy of the local “database” folder inside “database_backups”.
+     * <p>
+     * This method verifies that both the source directory (“database”) and the backup target
+     * (“database_backups”) exist, then constructs a new subfolder named
+     * “database-<timestamp>” (using {@code new dateTime().formattedDateTime()}) under the backup directory.
+     * It recursively traverses the entire source tree, recreates each directory, and copies every file
+     * with its original attributes into the new backup location. Upon success or failure, a GUI dialog
+     * notifies the user of the result.
+     * </p>
+     */
+
+    public void backUpDatabase() throws SQLException {
+        Path sourceDirectory    = Paths.get("database");
+        Path backupDirectory = Paths.get("database_backups");
+        
+        if (!Files.isDirectory(sourceDirectory)) {
+            JOptionPane.showMessageDialog(null, sourceDirectory + " not found.", "database not found", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        if (!Files.isDirectory(backupDirectory)) {
+            JOptionPane.showMessageDialog(null, backupDirectory + " not found.", "database_backups not found", JOptionPane.INFORMATION_MESSAGE);
+            return;
+    }
+
+    Path destinationDirectory = backupDirectory.resolve(sourceDirectory.getFileName() + "-" + new dateTime().formattedDateTime());
+
+        try {
+            Files.walkFileTree(sourceDirectory, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                    Path targetDir = destinationDirectory.resolve(sourceDirectory.relativize(dir));
+                    Files.createDirectories(targetDir);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Path targetFile = destinationDirectory.resolve(sourceDirectory.relativize(file));
+                    Files.copy(file, targetFile, StandardCopyOption.COPY_ATTRIBUTES);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+
+            JOptionPane.showMessageDialog(null, "Backup created", "Success", JOptionPane.INFORMATION_MESSAGE);
+            return;
+
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "Backup Failed", "Error", JOptionPane.INFORMATION_MESSAGE);
+            return;
         }
     }
 }
