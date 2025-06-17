@@ -4,15 +4,17 @@ import java.sql.*;
 import java.util.Map;
 
 //Write off lets value go below 0
-//Process sale window creates purchase order code on close
+//Process sale window creates purchase order code on close, confirms purchase order on completion
 //input as headers
 //configure the menu to have sections with related buttons
 //Create POWER BI similar dashboard to display data from database
 //encryption needed for passwords
 //Create backup and restore from backup
-//remove written off, profit, amount sold
 //Add item, swap add and cancel
 // as nonn admin, view all items then launches process sale afterwards.
+// Can process sale on item not existant
+// REturn item shows item recieved on completion
+// on recieve item, pop up displays * amount of items
 
 
 /**
@@ -246,10 +248,7 @@ public class Login {
                     "On Order" INTEGER,
                     "ReOrder Trigger" INTEGER,
                     "Purchase Price" REAL,
-                    "Sale Price" REAL,
-                    "Amount Sold" INTEGER,
-                    "Profit" REAL,
-                    "Written Off" INTEGER
+                    "Sale Price" REAL
                 )""",
                             """
                 CREATE TABLE IF NOT EXISTS movements (
@@ -270,6 +269,7 @@ public class Login {
                             """
                 CREATE TABLE IF NOT EXISTS sales (
                     "Item Code" TEXT,
+                    "Item Name" TEXT,
                     "Amount" INTEGER,
                     "Total Price" INTEGER,
                     "Reference" TEXT,

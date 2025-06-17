@@ -161,8 +161,8 @@ public class menuFunctions {
                     }
 
                     if (counter == 4 && itemCode != null && itemName != null && !exists) {
-                        String insertQuery = "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, `ReOrder Trigger`, `Purchase Price`, `Sale Price`, `Amount Sold`, `Profit`, `Written Off`) " +
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        String insertQuery = "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, `ReOrder Trigger`, `Purchase Price`, `Sale Price`) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
                         try (PreparedStatement insertStmt = connection.prepareStatement(insertQuery)) {
                             insertStmt.setString(1, itemCode);
@@ -173,9 +173,6 @@ public class menuFunctions {
                             insertStmt.setString(6, String.valueOf(reOrderTrigger));
                             insertStmt.setString(7, String.valueOf(purchasePrice));
                             insertStmt.setString(8, String.valueOf(salesPrice));
-                            insertStmt.setString(9, String.valueOf(0));
-                            insertStmt.setString(10, String.valueOf(0));
-                            insertStmt.setString(11, String.valueOf(0));
                             insertStmt.executeUpdate();
 
                             JOptionPane.showMessageDialog(null, "Item added successfully");
@@ -1410,23 +1407,6 @@ public class menuFunctions {
                         String item = entry.getKey();
                         int amountToWriteOff = entry.getValue();
 
-
-                        String newWriteOff = "UPDATE Inventory SET `Written Off` = `Written Off` + ? WHERE `Item Code` = ?";
-                        try (PreparedStatement preparedStatement = connection.prepareStatement(newWriteOff)) {
-                            preparedStatement.setInt(1, amountToWriteOff); // Subtract amountReceived
-                            preparedStatement.setString(2, item); // Match reference number
-                            preparedStatement.executeUpdate();
-
-                        }
-
-                        String newProfit = "UPDATE Inventory SET Profit = Profit - `Purchase Price` * ? WHERE `Item Code` = ?";
-                        try (PreparedStatement preparedStatement = connection.prepareStatement(newProfit)) {
-                            preparedStatement.setInt(1, amountToWriteOff); // Match reference number
-                            preparedStatement.setString(2, item); // Match reference number
-                            preparedStatement.executeUpdate();
-
-                        }
-
                         String newStockCount = "UPDATE Inventory SET Stock = Stock - ? WHERE `Item Code` = ?";
                         try (PreparedStatement preparedStatement = connection.prepareStatement(newStockCount)) {
                             preparedStatement.setInt(1, amountToWriteOff); // Subtract amountReceived
@@ -1585,19 +1565,16 @@ public class menuFunctions {
             for (String itemCode : saleItemMap.keySet()) {
                 int amount = saleItemMap.get(itemCode);
 
-
-                double purchasePrice = 0.0;
                 double salePrice = 0.0;
                 String itemName = "";
 
                 // Fetch Item Name, Purchase Price, and Sale Price in one query
-                String fetchItemDetailsQuery = "SELECT `Item Name`, `Purchase Price`, `Sale Price` FROM inventory WHERE `Item Code` = ?";
+                String fetchItemDetailsQuery = "SELECT `Item Name`, `Sale Price` FROM inventory WHERE `Item Code` = ?";
                 try (PreparedStatement fetchItemDetailsStmt = connection.prepareStatement(fetchItemDetailsQuery)) {
                     fetchItemDetailsStmt.setString(1, itemCode);
                     ResultSet rs = fetchItemDetailsStmt.executeQuery();
                     if (rs.next()) {
                         itemName = rs.getString("Item Name");
-                        purchasePrice = rs.getDouble("Purchase Price");
                         salePrice = rs.getDouble("Sale Price");
                     } else {
                         JOptionPane.showMessageDialog(null, "Item not found in inventory.", "Error", JOptionPane.ERROR_MESSAGE);
@@ -1607,7 +1584,6 @@ public class menuFunctions {
                     JOptionPane.showMessageDialog(null, "Database error when fetching item details: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-
 
                 try {
                     String insertPendingOrderQuery = "INSERT INTO sales (`Item Code`, `Item Name`, `Amount`, `Total Price`, `Reference`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?, ?)";
@@ -1627,20 +1603,7 @@ public class menuFunctions {
                         updateInventoryStmt.setInt(1, amount);
                         updateInventoryStmt.setString(2, itemCode);
                         updateInventoryStmt.executeUpdate();
-                    }
-
-                    String updateAmountSoldQuery = "UPDATE inventory SET `Amount Sold` = `Amount Sold` + ? WHERE `Item Code` = ?";
-                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateAmountSoldQuery)) {
-                        updateInventoryStmt.setInt(1, amount);
-                        updateInventoryStmt.setString(2, itemCode);
-                        updateInventoryStmt.executeUpdate();
-                    }
-
-                    String updateProfitQuery = "UPDATE inventory SET `Profit` = Profit + ? WHERE `Item Code` = ?";
-                    try (PreparedStatement updateInventoryStmt = connection.prepareStatement(updateProfitQuery)) {
-                        updateInventoryStmt.setDouble(1, (salePrice - purchasePrice) * amount);
-                        updateInventoryStmt.setString(2, itemCode);
-                        updateInventoryStmt.executeUpdate();
+                    
                     }
 
                     String insertMovementQuery = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) VALUES (?, ?, ?, ?, ?)";
@@ -1919,26 +1882,6 @@ public class menuFunctions {
                     String codeReceived = entry.getKey();
                     int amountReceived = entry.getValue();
 
-                    double purchasePrice = 0.0;
-                    double salePrice = 0.0;
-
-                    // Fetch Item Name, Purchase Price, and Sale Price in one query
-                    String fetchItemDetailsQuery = "SELECT `Item Name`, `Purchase Price`, `Sale Price` FROM inventory WHERE `Item Code` = ?";
-                    try (PreparedStatement fetchItemDetailsStmt = connection.prepareStatement(fetchItemDetailsQuery)) {
-                        fetchItemDetailsStmt.setString(1, codeReceived);
-                        ResultSet rs = fetchItemDetailsStmt.executeQuery();
-                        if (rs.next()) {
-                            purchasePrice = rs.getDouble("Purchase Price");
-                            salePrice = rs.getDouble("Sale Price");
-                        } else {
-                            JOptionPane.showMessageDialog(null, "Item not found in inventory.", "Error", JOptionPane.ERROR_MESSAGE);
-                            continue;
-                        }
-                    } catch (SQLException ex) {
-                        JOptionPane.showMessageDialog(null, "Database error when fetching item details: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-                        return;
-                    }
-
                     if (amountReceived > 0) {
                         String updateReceivingLog = "UPDATE sales SET Amount = Amount - ? WHERE `Reference` = ? AND `Item Code` = ?";
                         try (PreparedStatement preparedStatement = connection.prepareStatement(updateReceivingLog)) {
@@ -1948,13 +1891,6 @@ public class menuFunctions {
                             preparedStatement.executeUpdate();
                         }
 
-                        String updateOnOrder = "UPDATE Inventory SET `Amount Sold` = `Amount Sold` - ? WHERE `Item Code` = ?";
-                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnOrder)) {
-                            preparedStatement.setInt(1, amountReceived); // Subtract amountReceived
-                            preparedStatement.setString(2, codeReceived); // Match reference number
-                            preparedStatement.executeUpdate();
-
-                        }
 
                         String updateOnDock = "UPDATE Inventory SET `Stock` = `Stock` + ? WHERE `Item Code` = ?";
                         try (PreparedStatement preparedStatement = connection.prepareStatement(updateOnDock)) {
@@ -1964,13 +1900,6 @@ public class menuFunctions {
 
                         }
 
-                        String updateProfit = "UPDATE Inventory SET `Profit` = `Profit` - ? WHERE `Item Code` = ?";
-                        try (PreparedStatement preparedStatement = connection.prepareStatement(updateProfit)) {
-                            preparedStatement.setDouble(1, (salePrice - purchasePrice) * amountReceived); // Subtract amountReceived
-                            preparedStatement.setString(2, codeReceived); // Match reference number
-                            preparedStatement.executeUpdate();
-
-                        }
 
                         String updateMovements = "INSERT INTO movements (`Item`, `Amount`, `Type`, `User`, `Date`) " +
                                 "VALUES (?, ?, ?, ?, ?)";
