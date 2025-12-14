@@ -7,13 +7,17 @@ import java.util.Map;
 //Process sale window creates purchase order code on close, confirms purchase order on completion
 //input as headers
 //configure the menu to have sections with related buttons
-//Create POWER BI similar dashboard to display data from database
+//Create POWER BI/Matplotlib similar dashboard to display data from database
 //encryption needed for passwords
 //restore from backup
 //Add item, swap add and cancel
 // Can process sale on item not existant
 // REturn item shows item recieved on completion
 // on recieve item, pop up displays * amount of items
+// add imagine folder and an option to open the image that matches item code on request
+// Change on dock to recieved
+//Seperate menuFunctions into multiple different classes
+// Update GUI's
 
 
 /**
@@ -22,10 +26,13 @@ import java.util.Map;
 
 public class Login {
 
+    
     public static void main(String[] args) {
+        
         String userDatabasePath = "database/userDatabase.db";
         String loginsDatabasePath = "database/loginsDatabase.db";
-
+        
+        
         try (Connection userConnection = DriverManager.getConnection("jdbc:sqlite:" + userDatabasePath);
              Connection loginsConnection = DriverManager.getConnection("jdbc:sqlite:" + loginsDatabasePath)) {
 

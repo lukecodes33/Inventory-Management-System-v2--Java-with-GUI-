@@ -1096,9 +1096,7 @@ public class menuFunctions {
         dialog.setVisible(true);
     }
 
-
-
-
+    
 
     /**
      * Adjusts the reorder trigger level for an inventory item, accessible only to admin users.
