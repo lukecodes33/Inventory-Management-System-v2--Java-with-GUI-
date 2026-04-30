@@ -130,7 +130,6 @@ public final class DatabaseManager {
                     "Item Code" TEXT PRIMARY KEY,
                     "Item Name" TEXT NOT NULL,
                     "Stock" INTEGER NOT NULL DEFAULT 0,
-                    "On Dock" INTEGER NOT NULL DEFAULT 0,
                     "On Order" INTEGER NOT NULL DEFAULT 0,
                     "ReOrder Trigger" INTEGER NOT NULL DEFAULT 0,
                     "Supplier" TEXT,
@@ -295,6 +294,12 @@ public final class DatabaseManager {
                 statement.execute("ALTER TABLE Inventory DROP COLUMN \"Sale Price\"");
             }
         }
+        if (columnExists(connection, "Inventory", "On Dock")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate("UPDATE Inventory SET \"Stock\" = \"Stock\" + COALESCE(\"On Dock\", 0)");
+                statement.execute("ALTER TABLE Inventory DROP COLUMN \"On Dock\"");
+            }
+        }
         if (columnExists(connection, "Inventory", "Purchase Price")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("ALTER TABLE Inventory DROP COLUMN \"Purchase Price\"");
@@ -401,9 +406,7 @@ public final class DatabaseManager {
             if (!tableExists(legacyConnection, "Inventory")) {
                 return;
             }
-            String selectSql = "SELECT \"Item Code\", \"Item Name\", \"Stock\", \"On Dock\", \"On Order\", \"ReOrder Trigger\" FROM Inventory";
-            String insertSql = "INSERT OR IGNORE INTO Inventory (\"Item Code\", \"Item Name\", \"Stock\", \"On Dock\", \"On Order\", \"ReOrder Trigger\", \"Supplier\", \"Lead Time\", \"Notes\", \"Market Price\") VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)";
-            copyLegacyInventoryWithoutPricingColumns(legacyConnection, enterpriseConnection, selectSql, insertSql);
+            copyLegacyInventoryMergedIntoEnterprise(legacyConnection, enterpriseConnection);
         }
     }
 
@@ -509,20 +512,27 @@ public final class DatabaseManager {
         }
     }
 
-    /** Copies legacy inventory rows (first six columns) into enterprise Inventory including nullable Supplier/Lead Time. */
-    private static void copyLegacyInventoryWithoutPricingColumns(
-            Connection source,
-            Connection target,
-            String selectSql,
-            String insertSql
-    ) throws SQLException {
+    /**
+     * Copies legacy Inventory rows into enterprise Inventory with former {@code On Dock} merged into {@code Stock}
+     * (dock no longer exists in the enterprise schema).
+     */
+    private static void copyLegacyInventoryMergedIntoEnterprise(Connection source, Connection target) throws SQLException {
+        String selectSql =
+                "SELECT \"Item Code\", \"Item Name\", \"Stock\", \"On Dock\", \"On Order\", \"ReOrder Trigger\" FROM Inventory";
+        String insertSql =
+                "INSERT OR IGNORE INTO Inventory (\"Item Code\", \"Item Name\", \"Stock\", \"On Order\", \"ReOrder Trigger\", "
+                        + "\"Supplier\", \"Lead Time\", \"Notes\", \"Market Price\") VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)";
         try (Statement selectStatement = source.createStatement();
              ResultSet resultSet = selectStatement.executeQuery(selectSql);
              PreparedStatement insertStatement = target.prepareStatement(insertSql)) {
             while (resultSet.next()) {
-                for (int i = 1; i <= 6; i++) {
-                    insertStatement.setObject(i, resultSet.getObject(i));
-                }
+                insertStatement.setString(1, resultSet.getString("Item Code"));
+                insertStatement.setString(2, resultSet.getString("Item Name"));
+                int dock = resultSet.getInt("On Dock");
+                int stockOnly = resultSet.getInt("Stock");
+                insertStatement.setInt(3, stockOnly + dock);
+                insertStatement.setInt(4, resultSet.getInt("On Order"));
+                insertStatement.setInt(5, resultSet.getInt("ReOrder Trigger"));
                 insertStatement.executeUpdate();
             }
         }

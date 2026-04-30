@@ -103,9 +103,7 @@ import javax.imageio.ImageIO;
  * Photo and Notes upload preview. Images are never upscaled beyond their file resolution
  * (see {@link #loadScaledItemPhotoIcon(Path, int, int)}).
  * </p>
- * <p>
- * Legacy {@link InventoryActions}, {@link OrderActions}, {@link SalesActions}, and {@link AccountActions}
- * instances are passed in for menu hooks that still open modal dialogs.
+ * <p>{@link AccountActions} provides backup flows and modal password reset from the sidebar.
  * </p>
  */
 public final class WorkspaceShell {
@@ -610,18 +608,12 @@ public final class WorkspaceShell {
      *
      * @param user active signed-in user
      * @param connection open database connection for workspace session
-     * @param inventoryActions legacy inventory action handler
-     * @param orderActions legacy order action handler
-     * @param salesActions legacy sales action handler
-     * @param accountActions legacy account action handler
+     * @param accountActions account-related modal flows (backup, password reset)
      * @param whenWindowClosed optional callback after the frame is disposed and the DB connection is closed
      */
     public static void open(
             User user,
             Connection connection,
-            InventoryActions inventoryActions,
-            OrderActions orderActions,
-            SalesActions salesActions,
             AccountActions accountActions,
             Runnable whenWindowClosed
     ) {
@@ -653,7 +645,7 @@ public final class WorkspaceShell {
         AppUI.applyPanelBackground(workspaceContainer);
         workspaceContainer.add(buildEmptyWorkspaceCanvas(), "home");
 
-        JPanel sidebar = buildSidebar(user, frame, workspaceContainer, connection, inventoryActions, orderActions, salesActions, accountActions);
+        JPanel sidebar = buildSidebar(user, frame, workspaceContainer, connection, accountActions);
 
         final JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, workspaceContainer);
         splitPane.setDividerLocation(SIDEBAR_TARGET_WIDTH);
@@ -766,9 +758,6 @@ public final class WorkspaceShell {
             JFrame frame,
             JPanel workspaceContainer,
             Connection connection,
-            InventoryActions inventoryActions,
-            OrderActions orderActions,
-            SalesActions salesActions,
             AccountActions accountActions
     ) {
         JPanel container = new JPanel(new BorderLayout());
@@ -793,7 +782,7 @@ public final class WorkspaceShell {
         NavSidebarSelector navSelector = new NavSidebarSelector();
         workspaceContainer.putClientProperty(CLIENT_NAV_SIDEBAR_SELECTOR, navSelector);
 
-        for (NavItem item : getItems(user, connection, inventoryActions, orderActions, salesActions, accountActions, frame, workspaceContainer)) {
+        for (NavItem item : getItems(user, connection, accountActions, frame, workspaceContainer)) {
             JButton button = new JButton(item.label);
             button.setAlignmentX(Component.LEFT_ALIGNMENT);
             button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
@@ -861,10 +850,7 @@ public final class WorkspaceShell {
      *
      * @param user active signed-in user
      * @param connection active database connection
-     * @param inventoryActions legacy inventory action handler
-     * @param orderActions legacy order action handler
-     * @param salesActions legacy sales action handler
-     * @param accountActions legacy account action handler
+     * @param accountActions account dialogs (backup, password reset)
      * @param frame parent workspace frame
      * @param workspaceContainer workspace card container
      * @return navigation item list
@@ -872,9 +858,6 @@ public final class WorkspaceShell {
     private static List<NavItem> getItems(
             User user,
             Connection connection,
-            InventoryActions inventoryActions,
-            OrderActions orderActions,
-            SalesActions salesActions,
             AccountActions accountActions,
             JFrame frame,
             JPanel workspaceContainer
@@ -891,7 +874,6 @@ public final class WorkspaceShell {
         }
         items.add(new NavItem(VIEW_PO_TRACKING, () -> buildPurchaseOrdersPanel(user, connection, workspaceContainer)));
         items.add(new NavItem("Receive Order", () -> buildReceiveOrderPanel(user, connection, workspaceContainer)));
-        items.add(new NavItem("Putaway Stock", () -> buildPutAwayPanel(user, connection, workspaceContainer)));
         items.add(new NavItem("Low Stock Check", () -> buildLowStockPanel(connection)));
         if (admin) {
             items.add(new NavItem("Change Reorder Triggers", () -> buildAdjustReorderPanel(user, connection)));
@@ -1209,7 +1191,6 @@ public final class WorkspaceShell {
         String itemName;
         int stock;
         int onOrder;
-        int onDock;
         String supplier;
         int leadVal;
         boolean leadNull;
@@ -1218,7 +1199,7 @@ public final class WorkspaceShell {
         boolean marketNull;
         double latestLayerUnit;
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT `Item Name`, `Stock`, `On Order`, `On Dock`, COALESCE(`Supplier`, '') AS sup, "
+                "SELECT `Item Name`, `Stock`, `On Order`, COALESCE(`Supplier`, '') AS sup, "
                         + "`Lead Time`, `ReOrder Trigger`, `Market Price` FROM inventory WHERE `Item Code` = ?"
         )) {
             ps.setString(1, itemCode);
@@ -1230,7 +1211,6 @@ public final class WorkspaceShell {
                 itemName = rs.getString("Item Name");
                 stock = rs.getInt("Stock");
                 onOrder = rs.getInt("On Order");
-                onDock = rs.getInt("On Dock");
                 supplier = rs.getString("sup");
                 leadVal = rs.getInt("Lead Time");
                 leadNull = rs.wasNull();
@@ -1270,7 +1250,6 @@ public final class WorkspaceShell {
         addDetailFieldRow(fields, "Supplier:", supplier == null || supplier.isEmpty() ? "—" : supplier);
         addDetailFieldRow(fields, "Stock:", String.valueOf(stock));
         addDetailFieldRow(fields, "On order:", String.valueOf(onOrder));
-        addDetailFieldRow(fields, "On dock:", String.valueOf(onDock));
         addDetailFieldRow(fields, "Lead time (days):", leadNull ? "—" : String.valueOf(leadVal));
         addDetailFieldRow(fields, "Reorder trigger:", String.valueOf(reorder));
         addDetailFieldRow(fields, "Market price (ea.):", marketNull ? "—" : formatUsdMoney(marketUnit));
@@ -1346,8 +1325,8 @@ public final class WorkspaceShell {
         };
         return buildFilterableTablePanel(
                 "Inventory Items",
-                new String[]{"Item Code", "Item Name", "Stock", "On Order", "On Dock", "Supplier", "Lead Time", "Market Price"},
-                "SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, COALESCE(`Supplier`, 'N/A') AS `Supplier`, "
+                new String[]{"Item Code", "Item Name", "Stock", "On Order", "Supplier", "Lead Time", "Market Price"},
+                "SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, COALESCE(`Supplier`, 'N/A') AS `Supplier`, "
                         + "COALESCE(CAST(`Lead Time` AS TEXT), 'N/A') AS `Lead Time`, "
                         + "CASE WHEN `Market Price` IS NULL THEN '' ELSE printf('%.2f', `Market Price`) END AS `Market Price` "
                         + "FROM inventory",
@@ -1383,7 +1362,6 @@ public final class WorkspaceShell {
                         "Supplier",
                         "Lead Time",
                         "Stock",
-                        "On Dock",
                         "On Order",
                         "Recent Sales (14d)",
                         "Suggested Reorder Qty"
@@ -1398,13 +1376,12 @@ public final class WorkspaceShell {
                         ELSE CAST(i.`Lead Time` AS TEXT)
                     END AS `Lead Time`,
                     i.`Stock` AS `Stock`,
-                    i.`On Dock` AS `On Dock`,
                     i.`On Order` AS `On Order`,
                     COALESCE(s.recent_sales, 0) AS `Recent Sales (14d)`,
                     (
                         CASE
-                            WHEN (i.`ReOrder Trigger` - (i.`Stock` + i.`On Dock` + i.`On Order`)) > 0
-                            THEN (i.`ReOrder Trigger` - (i.`Stock` + i.`On Dock` + i.`On Order`))
+                            WHEN (i.`ReOrder Trigger` - (i.`Stock` + i.`On Order`)) > 0
+                            THEN (i.`ReOrder Trigger` - (i.`Stock` + i.`On Order`))
                             ELSE 0
                         END
                     ) +
@@ -2367,12 +2344,13 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Builds receive-order panel to move stock from on-order to on-dock.
+     * Builds receive-order panel: receipts post to Stock and FIFO layers; reduces open PO quantities and {@code On Order}.
      *
      * @param user active signed-in user
      * @param connection active database connection
      * @param workspaceContainer workspace card container
      * @return receive-order panel
+     * @throws SQLException when pending-order table fails to load
      */
     private static JPanel buildReceiveOrderPanel(User user, Connection connection, JPanel workspaceContainer) throws SQLException {
         return buildReceiveOrderPanel(user, connection, workspaceContainer, null, null);
@@ -2522,148 +2500,6 @@ public final class WorkspaceShell {
             }
         });
 
-        JPanel footer = buildActionBar(refreshPending, submit);
-        panel.add(form, BorderLayout.NORTH);
-        JPanel center = new JPanel(new BorderLayout(0, 8));
-        AppUI.applyPanelBackground(center);
-        center.add(pendingScroll, BorderLayout.CENTER);
-        center.add(searchPanel, BorderLayout.SOUTH);
-        panel.add(center, BorderLayout.CENTER);
-        panel.add(footer, BorderLayout.SOUTH);
-        return panel;
-    }
-
-    /** Builds put-away panel to move stock from dock into available stock. */
-    private static JPanel buildPutAwayPanel(User user, Connection connection, JPanel workspaceContainer) {
-        JPanel panel = buildFormPanel("Putaway Stock");
-        JPanel form = new JPanel(new GridLayout(0, 2, 12, 12));
-        AppUI.applyPanelBackground(form);
-        JTextField itemCode = new JTextField();
-        JTextField quantity = new JTextField();
-        styleInput(itemCode, quantity);
-        form.add(new JLabel("Item Code *"));
-        form.add(itemCode);
-        form.add(new JLabel("Put-away Quantity *"));
-        form.add(quantity);
-
-        DefaultTableModel pendingPutAwayModel = new DefaultTableModel(
-                new String[]{"Item Code", "Item Name", "On Dock"},
-                0
-        );
-        JTable pendingPutAwayTable = new JTable(pendingPutAwayModel);
-        installTableCopyMenu(pendingPutAwayTable);
-        TableRowSorter<DefaultTableModel> pendingSorter = new TableRowSorter<>(pendingPutAwayModel);
-        pendingPutAwayTable.setRowSorter(pendingSorter);
-        try {
-            loadPendingPutAways(pendingPutAwayModel, connection);
-        } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(panel, "Unable to load pending put-aways: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-        }
-        pendingPutAwayTable.getSelectionModel().addListSelectionListener(e -> {
-            if (e.getValueIsAdjusting()) {
-                return;
-            }
-            int selectedRow = pendingPutAwayTable.getSelectedRow();
-            if (selectedRow < 0) {
-                return;
-            }
-            int modelRow = pendingPutAwayTable.convertRowIndexToModel(selectedRow);
-            itemCode.setText(String.valueOf(pendingPutAwayModel.getValueAt(modelRow, 0)));
-            quantity.setText(String.valueOf(pendingPutAwayModel.getValueAt(modelRow, 2)));
-        });
-        JScrollPane pendingScroll = new JScrollPane(pendingPutAwayTable);
-        pendingScroll.setBorder(AppUI.newRoundedBorder(8));
-
-        JPanel searchPanel = new JPanel(new GridLayout(1, 2, 8, 8));
-        AppUI.applyPanelBackground(searchPanel);
-        JTextField pendingSearch = new JTextField();
-        pendingSearch.setBorder(AppUI.newRoundedBorder(8));
-        searchPanel.add(new JLabel("Search Pending Put-aways (Item Code / Name)"));
-        searchPanel.add(pendingSearch);
-        pendingSearch.getDocument().addDocumentListener(new DocumentListener() {
-            private void applyFilter() {
-                String text = pendingSearch.getText();
-                if (text == null || text.trim().isEmpty()) {
-                    pendingSorter.setRowFilter(null);
-                    return;
-                }
-                String like = text.trim();
-                pendingSorter.setRowFilter(RowFilter.regexFilter("(?i)" + java.util.regex.Pattern.quote(like), 0, 1));
-            }
-
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                applyFilter();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                applyFilter();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                applyFilter();
-            }
-        });
-
-        JButton refreshPending = new JButton("Refresh Pending Put-aways");
-        styleSecondaryButton(refreshPending);
-        refreshPending.addActionListener(e -> {
-            try {
-                loadPendingPutAways(pendingPutAwayModel, connection);
-            } catch (SQLException ex) {
-                JOptionPane.showMessageDialog(panel, "Unable to refresh pending put-aways: " + ex.getMessage());
-            }
-        });
-
-        JButton submit = new JButton("Put Away");
-        AppUI.stylePrimaryButton(submit);
-        submit.addActionListener(e -> {
-            String code = itemCode.getText().trim();
-            if (code.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Item code is required.");
-                return;
-            }
-            try {
-                int qty = Integer.parseInt(quantity.getText().trim());
-                if (qty <= 0) {
-                    JOptionPane.showMessageDialog(panel, "Quantity must be greater than zero.");
-                    return;
-                }
-                int onDock = getIntValue(connection, "SELECT `On Dock` FROM Inventory WHERE `Item Code` = ?", code);
-                if (qty > onDock) {
-                    JOptionPane.showMessageDialog(panel, "Put-away quantity cannot exceed on-dock amount.");
-                    return;
-                }
-                try (PreparedStatement downDock = connection.prepareStatement("UPDATE Inventory SET `On Dock` = `On Dock` - ? WHERE `Item Code` = ?")) {
-                    downDock.setInt(1, qty);
-                    downDock.setString(2, code);
-                    downDock.executeUpdate();
-                }
-                try (PreparedStatement upStock = connection.prepareStatement("UPDATE Inventory SET `Stock` = `Stock` + ? WHERE `Item Code` = ?")) {
-                    upStock.setInt(1, qty);
-                    upStock.setString(2, code);
-                    upStock.executeUpdate();
-                }
-                try (PreparedStatement movement = connection.prepareStatement("INSERT INTO movements (`Item`, `Amount`, `Type`, `Reason`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
-                    movement.setString(1, code);
-                    movement.setString(2, String.valueOf(qty));
-                    movement.setString(3, "PUT-AWAY");
-                    movement.setString(4, "PUT_AWAY_FROM_DOCK");
-                    movement.setString(5, user.getUsername());
-                    movement.setString(6, new dateTime().formattedDateTime());
-                    movement.executeUpdate();
-                }
-                JOptionPane.showMessageDialog(panel, "Put-away completed successfully.");
-                loadPendingPutAways(pendingPutAwayModel, connection);
-                showView(workspaceContainer, "View Items", buildInventoryTablePanel(user, connection));
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(panel, "Enter a valid quantity.");
-            } catch (SQLException ex) {
-                JOptionPane.showMessageDialog(panel, "Database error: " + ex.getMessage());
-            }
-        });
         JPanel footer = buildActionBar(refreshPending, submit);
         panel.add(form, BorderLayout.NORTH);
         JPanel center = new JPanel(new BorderLayout(0, 8));
@@ -4230,30 +4066,29 @@ public final class WorkspaceShell {
             notesForDb = notesForDb.substring(0, ITEM_NOTES_MAX_CHARS);
         }
         try (PreparedStatement insert = connection.prepareStatement(
-                "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `On Dock`, `ReOrder Trigger`, `Supplier`, `Lead Time`, `Notes`, `Market Price`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO Inventory (`Item Code`, `Item Name`, `Stock`, `On Order`, `ReOrder Trigger`, `Supplier`, `Lead Time`, `Notes`, `Market Price`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )) {
             insert.setString(1, itemCodeValue);
             insert.setString(2, itemNameValue);
             insert.setInt(3, stockCount);
             insert.setInt(4, 0);
-            insert.setInt(5, 0);
-            insert.setInt(6, reorderTrigger);
+            insert.setInt(5, reorderTrigger);
             if (supplierValue == null || supplierValue.isEmpty()) {
-                insert.setNull(7, java.sql.Types.VARCHAR);
+                insert.setNull(6, java.sql.Types.VARCHAR);
             } else {
-                insert.setString(7, supplierValue);
+                insert.setString(6, supplierValue);
             }
             if (leadTimeDays == null) {
-                insert.setNull(8, java.sql.Types.INTEGER);
+                insert.setNull(7, java.sql.Types.INTEGER);
             } else {
-                insert.setInt(8, leadTimeDays);
+                insert.setInt(7, leadTimeDays);
             }
             if (notesForDb.isEmpty()) {
-                insert.setNull(9, java.sql.Types.VARCHAR);
+                insert.setNull(8, java.sql.Types.VARCHAR);
             } else {
-                insert.setString(9, notesForDb);
+                insert.setString(8, notesForDb);
             }
-            insert.setNull(10, java.sql.Types.REAL);
+            insert.setNull(9, java.sql.Types.REAL);
             insert.executeUpdate();
         }
         if (stockCount > 0) {
@@ -4294,29 +4129,6 @@ public final class WorkspaceShell {
                         rs.getDouble("Purchase Price"),
                         rs.getString("Reference"),
                         rs.getString("Date")
-                });
-            }
-        }
-    }
-
-    /**
-     * Loads pending put-away candidates (inventory lines with on-dock quantity).
-     *
-     * @param model target table model
-     * @param connection active database connection
-     * @throws SQLException when query fails
-     */
-    private static void loadPendingPutAways(DefaultTableModel model, Connection connection) throws SQLException {
-        model.setRowCount(0);
-        String sql = "SELECT `Item Code`, `Item Name`, `On Dock` FROM Inventory WHERE `On Dock` > 0 ORDER BY `On Dock` DESC, `Item Code` ASC";
-        try (PreparedStatement statement = connection.prepareStatement(sql);
-             ResultSet rs = statement.executeQuery()) {
-            while (rs.next()) {
-                int onDock = rs.getInt("On Dock");
-                model.addRow(new Object[]{
-                        rs.getString("Item Code"),
-                        rs.getString("Item Name"),
-                        onDock
                 });
             }
         }
@@ -4427,7 +4239,7 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Applies receive updates and records corresponding FIFO cost layer.
+     * Applies receive updates: increments sellable Stock, records FIFO layer, clears completed PO lines.
      *
      * @param user active signed-in user
      * @param connection active database connection
@@ -4449,10 +4261,10 @@ public final class WorkspaceShell {
             updateOnOrder.setString(2, codeReceived);
             updateOnOrder.executeUpdate();
         }
-        try (PreparedStatement updateOnDock = connection.prepareStatement("UPDATE Inventory SET `On Dock` = `On Dock` + ? WHERE `Item Code` = ?")) {
-            updateOnDock.setInt(1, amountReceived);
-            updateOnDock.setString(2, codeReceived);
-            updateOnDock.executeUpdate();
+        try (PreparedStatement updateStock = connection.prepareStatement("UPDATE Inventory SET Stock = Stock + ? WHERE `Item Code` = ?")) {
+            updateStock.setInt(1, amountReceived);
+            updateStock.setString(2, codeReceived);
+            updateStock.executeUpdate();
         }
         try (PreparedStatement addLayer = connection.prepareStatement(
                 "INSERT INTO inventory_cost_layers (item_code, reference, unit_cost, qty_received, qty_remaining, created_at) VALUES (?, ?, ?, ?, ?, ?)"

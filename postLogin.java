@@ -2,7 +2,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 
 /**
- * Bridges authentication to the main workspace: constructs legacy action handlers and opens {@link WorkspaceShell}.
+ * Bridges authentication to the main workspace: opens {@link WorkspaceShell} after sign-in.
  */
 public final class postLogin {
 
@@ -18,10 +18,7 @@ public final class postLogin {
      */
     static void mainMenu(User user, Runnable whenWindowClosed) throws SQLException {
         Connection connection = DatabaseManager.getConnection();
-        InventoryActions inventoryActions = new InventoryActions();
-        OrderActions orderActions = new OrderActions();
-        SalesActions salesActions = new SalesActions();
         AccountActions accountActions = new AccountActions();
-        WorkspaceShell.open(user, connection, inventoryActions, orderActions, salesActions, accountActions, whenWindowClosed);
+        WorkspaceShell.open(user, connection, accountActions, whenWindowClosed);
     }
 }

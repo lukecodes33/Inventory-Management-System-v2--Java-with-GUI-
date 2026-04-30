@@ -27,12 +27,11 @@ public final class DemoDataSeeder {
             ITEM_COUNT + ITEM_COUNT * LAYERS_PER_ITEM + SALES_ROWS + SALES_ROWS + MISC_MOVEMENT_ROWS + PENDING_ORDER_ROWS;
 
     private static final DateTimeFormatter DISPLAY_TS = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
-    private static final String[] MISC_TYPES = {"RECEIVED", "ORDERED", "PUT-AWAY", "ADD", "WRITE OFF"};
+    private static final String[] MISC_TYPES = {"RECEIVED", "ORDERED", "ADD", "WRITE OFF"};
     private static final String[] MISC_REASONS = {
             "SEED_DEMO",
             "PURCHASE_ORDER_RECEIPT",
             "PURCHASE_ORDER_CREATED",
-            "PUT_AWAY",
             "INITIAL_STOCK",
             "ADJUSTMENT"
     };
@@ -89,8 +88,8 @@ public final class DemoDataSeeder {
     }
 
     private static void seedInventory(Connection connection, ThreadLocalRandom rnd, int[] stockNow) throws SQLException {
-        String sql = "INSERT INTO Inventory (\"Item Code\", \"Item Name\", \"Stock\", \"On Dock\", \"On Order\", "
-                + "\"ReOrder Trigger\", \"Supplier\", \"Lead Time\", \"Notes\", \"Market Price\") VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, NULL)";
+        String sql = "INSERT INTO Inventory (\"Item Code\", \"Item Name\", \"Stock\", \"On Order\", "
+                + "\"ReOrder Trigger\", \"Supplier\", \"Lead Time\", \"Notes\", \"Market Price\") VALUES (?, ?, ?, 0, ?, ?, ?, ?, NULL)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (int i = 0; i < ITEM_COUNT; i++) {
                 String code = itemCode(i);
