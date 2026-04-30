@@ -105,6 +105,8 @@ import javax.imageio.ImageIO;
  * </p>
  * <p>{@link AccountActions} provides backup flows and modal password reset from the sidebar.
  * </p>
+ * <p>Larger flows are grouped in {@code build*} panel factories (inventory, PO tracking, receipts, sales, reporting,
+ * user admin) plus {@link #open} wiring the shell frame split layout.</p>
  */
 public final class WorkspaceShell {
     private static final int INPUT_HEIGHT = 34;
@@ -212,6 +214,7 @@ public final class WorkspaceShell {
         return "Made Up Company";
     }
 
+    /** Top session strip: signed-in user and company display name. */
     private static JPanel buildSessionTopBar(User user) {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBorder(BorderFactory.createCompoundBorder(
@@ -235,10 +238,15 @@ public final class WorkspaceShell {
     /** Admin layout only: right rail toggles between financial metrics and selected item photo. */
     private static volatile AdminMetricsRailHost adminMetricsRailHost;
 
+    /** One in-progress sale line (quantity and unit price) before checkout. */
     private static final class SaleDraftLine {
         int quantity;
         double unitSalePrice;
 
+        /**
+         * @param quantity       units to sell
+         * @param unitSalePrice price each
+         */
         SaleDraftLine(int quantity, double unitSalePrice) {
             this.quantity = quantity;
             this.unitSalePrice = unitSalePrice;
@@ -257,6 +265,15 @@ public final class WorkspaceShell {
         /** Optional JPEG chosen before commit; copied to {@code item_images/<code>.jpeg} after insert. */
         final Path pendingPhoto;
 
+        /**
+         * @param itemName      display name until {@code ITM} code is assigned at commit
+         * @param stock         initial stock count
+         * @param reorder       reorder trigger threshold
+         * @param supplier      supplier label (may be empty)
+         * @param leadTime      supplier lead time days, or null
+         * @param notes         free-text note (may be null)
+         * @param pendingPhoto  optional JPEG path staged for copy after insert
+         */
         AddItemDraftLine(String itemName, int stock, int reorder, String supplier, Integer leadTime, String notes, Path pendingPhoto) {
             this.itemName = itemName;
             this.stock = stock;
@@ -268,6 +285,7 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Schedules a deferred refresh of the admin financial metrics strip (noop when strip absent). */
     private static void requestMetricsRefresh() {
         FinancialMetricsStrip strip = activeMetricsStrip;
         if (strip != null) {
@@ -394,10 +412,10 @@ public final class WorkspaceShell {
             totalsBody.setLayout(new BoxLayout(totalsBody, BoxLayout.Y_AXIS));
             totalsBody.setOpaque(false);
             AppUI.applyPanelBackground(totalsBody);
-            addMetricLine(totalsBody, base, "Value on order", poExposureLabel, true);
-            addMetricLine(totalsBody, base, "Market value · stock", marketStockValueLabel, true);
-            addMetricLine(totalsBody, base, "Total P/L", profitLabel, true);
-            addMetricLine(totalsBody, base, "Total P/L %", marginLabel, false);
+            addPeriodRowInto(totalsBody, base, "Value on order", poExposureLabel, true);
+            addPeriodRowInto(totalsBody, base, "Market value · stock", marketStockValueLabel, true);
+            addPeriodRowInto(totalsBody, base, "Total P/L", profitLabel, true);
+            addPeriodRowInto(totalsBody, base, "Total P/L %", marginLabel, false);
             totalsCard.add(totalsBody, BorderLayout.CENTER);
             add(totalsCard);
             add(Box.createVerticalStrut(20));
@@ -409,6 +427,7 @@ public final class WorkspaceShell {
             }
         }
 
+        /** Bordered card panel used for period and totals sections. */
         private static JPanel newCardShell() {
             JPanel p = new JPanel(new BorderLayout(0, 0));
             AppUI.applyPanelBackground(p);
@@ -417,6 +436,7 @@ public final class WorkspaceShell {
             return p;
         }
 
+        /** Card section title bar (gray header band). */
         private static JLabel sectionHeading(Font base, String text) {
             JLabel h = new JLabel(text);
             h.setOpaque(true);
@@ -429,6 +449,15 @@ public final class WorkspaceShell {
             return h;
         }
 
+        /**
+         * Adds a caption / value row to a metrics card (period P/L lines and exposure totals share the same chrome).
+         *
+         * @param parent        vertical box host
+         * @param base          reference font for sizing
+         * @param caption       left label
+         * @param valueLabel    right-aligned value control
+         * @param dividerBelow  when true, paints a bottom divider on the row
+         */
         private void addPeriodRowInto(JPanel parent, Font base, String caption, JLabel valueLabel, boolean dividerBelow) {
             JPanel row = new JPanel(new BorderLayout(10, 0));
             row.setOpaque(false);
@@ -451,29 +480,7 @@ public final class WorkspaceShell {
             parent.add(row);
         }
 
-        /** Same typography and row chrome as {@link #addPeriodRowInto} so values line up. */
-        private void addMetricLine(JPanel parent, Font base, String caption, JLabel valueLabel, boolean dividerBelow) {
-            JPanel row = new JPanel(new BorderLayout(10, 0));
-            row.setOpaque(false);
-            AppUI.applyPanelBackground(row);
-            if (dividerBelow) {
-                row.setBorder(BorderFactory.createCompoundBorder(
-                        BorderFactory.createMatteBorder(0, 0, 1, 0, CARD_BORDER),
-                        BorderFactory.createEmptyBorder(8, 10, 8, 10)));
-            } else {
-                row.setBorder(BorderFactory.createEmptyBorder(8, 10, 10, 10));
-            }
-            JLabel cap = new JLabel(caption);
-            cap.setFont(base.deriveFont(Font.PLAIN, 11f));
-            cap.setForeground(MUTED);
-            valueLabel.setFont(base.deriveFont(Font.BOLD, 14f));
-            valueLabel.setHorizontalAlignment(SwingConstants.RIGHT);
-            valueLabel.setVerticalAlignment(SwingConstants.CENTER);
-            row.add(cap, BorderLayout.WEST);
-            row.add(valueLabel, BorderLayout.EAST);
-            parent.add(row);
-        }
-
+        /** One ranked line in the “Top movers” list. */
         private JPanel buildMoverRow(int rank, InventoryFifo.TopMoverRow row, Font base, boolean zebra) {
             JPanel line = new JPanel(new BorderLayout(8, 0));
             line.setOpaque(true);
@@ -502,10 +509,12 @@ public final class WorkspaceShell {
             return line;
         }
 
+        /** Colors a P/L label green (≥0) or red (&lt;0). */
         private static void setPlColor(JLabel label, double pl) {
             label.setForeground(pl >= 0 ? new Color(0x15803d) : new Color(0xb91c1c));
         }
 
+        /** Replaces the movers list with a single error message. */
         private void fillMoversError(Font base, String message) {
             topMoversRows.removeAll();
             JLabel err = new JLabel(message);
@@ -917,6 +926,7 @@ public final class WorkspaceShell {
         requestMetricsRefresh();
     }
 
+    /** Restores the admin right rail to the financial metrics card after leaving item-specific views. */
     private static void restoreMetricsRailToDefault() {
         AdminMetricsRailHost host = adminMetricsRailHost;
         if (host != null) {
@@ -924,12 +934,14 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Default (unselected) sidebar navigation button styling. */
     private static void applyNavButtonDefaultStyle(JButton button) {
         button.setBackground(SIDEBAR_NAV_DEFAULT_BG);
         button.setForeground(SIDEBAR_NAV_DEFAULT_FG);
         button.setBorder(AppUI.newRoundedBorder(8));
     }
 
+    /** Highlights the active sidebar workspace card tab. */
     private static void applyNavButtonSelectedStyle(JButton button) {
         button.setBackground(SIDEBAR_NAV_SELECTED_BG);
         button.setForeground(SIDEBAR_NAV_SELECTED_FG);
@@ -943,11 +955,13 @@ public final class WorkspaceShell {
         private final Map<String, JButton> keyToButton = new HashMap<>();
         private String selectedKey;
 
+        /** Associates a sidebar button with a workspace card key and applies default styling. */
         private void registerNavViewButton(String cardKey, JButton button) {
             keyToButton.put(cardKey, button);
             applyNavButtonDefaultStyle(button);
         }
 
+        /** Updates which sidebar button renders as selected for the visible card key. */
         private void setSelectedCardKey(String key) {
             JButton previous = selectedKey == null ? null : keyToButton.get(selectedKey);
             if (previous != null) {
@@ -974,6 +988,13 @@ public final class WorkspaceShell {
         private final JLabel imageLabel;
         private final JTextArea statsArea;
 
+        /**
+         * @param connection shared DB session for lazy stats reload
+         * @param host         card-layout host swapping metrics vs photo
+         * @param titleLabel   item code headline on photo rail
+         * @param imageLabel   photo or placeholder canvas
+         * @param statsArea    multi-line item stats beside/below JPEG
+         */
         private AdminMetricsRailHost(
                 Connection connection,
                 JPanel host,
@@ -988,6 +1009,7 @@ public final class WorkspaceShell {
             this.statsArea = statsArea;
         }
 
+        /** Shows the financial metrics card in the right rail. */
         private void showMetrics() {
             CardLayout cl = (CardLayout) host.getLayout();
             cl.show(host, "metrics");
@@ -995,6 +1017,7 @@ public final class WorkspaceShell {
             host.repaint();
         }
 
+        /** Loads JPEG + textual stats for {@code itemCode} and switches the rail to photo mode. */
         private void showItemPhoto(String itemCode) {
             titleLabel.setText(itemCode);
             try {
@@ -1107,14 +1130,17 @@ public final class WorkspaceShell {
         return panel;
     }
 
+    /** Ensures {@link #ITEM_IMAGES_DIR} exists on disk (no-op when already present). */
     private static void ensureItemImagesDir() throws IOException {
         Files.createDirectories(ITEM_IMAGES_DIR);
     }
 
+    /** Canonical on-disk JPEG path for an item code ({@code .jpeg}). */
     private static Path itemImagePath(String itemCode) {
         return ITEM_IMAGES_DIR.resolve(itemCode + ".jpeg");
     }
 
+    /** Accepts {@code .jpg}/{@code .jpeg} filenames (case-insensitive). */
     private static boolean isJpegFileName(String name) {
         if (name == null) {
             return false;
@@ -1123,6 +1149,11 @@ public final class WorkspaceShell {
         return n.endsWith(".jpeg") || n.endsWith(".jpg");
     }
 
+    /**
+     * Validates and copies {@code source} into {@code item_images/&lt;itemCode&gt;.jpeg}.
+     *
+     * @throws IOException when the source is unreadable or not a valid JPEG
+     */
     private static void copySourceJpegToItemPhoto(Path source, String itemCode) throws IOException {
         if (!Files.isRegularFile(source)) {
             throw new IOException("Photo path is not a readable file.");
@@ -1178,6 +1209,7 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Appends label/value pair rows to the item detail dialog grid. */
     private static void addDetailFieldRow(JPanel grid, String label, String value) {
         JLabel l = new JLabel(label);
         l.setFont(l.getFont().deriveFont(Font.BOLD));
@@ -2264,7 +2296,7 @@ public final class WorkspaceShell {
                 if (reference.isEmpty()) {
                     reference = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
                 }
-                String now = new dateTime().formattedDateTime();
+                String now = dateTime.nowDisplayString();
 
                 try (PreparedStatement insertPending = connection.prepareStatement("INSERT INTO pendingOrders (`Item Code`, `Amount`, `Purchase Price`, `Reference`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
                     insertPending.setString(1, enteredCode);
@@ -2552,7 +2584,7 @@ public final class WorkspaceShell {
                     movement.setString(3, "UPDATED TRIGGER");
                     movement.setString(4, "REORDER_TRIGGER_UPDATE");
                     movement.setString(5, user.getUsername());
-                    movement.setString(6, new dateTime().formattedDateTime());
+                    movement.setString(6, dateTime.nowDisplayString());
                     movement.executeUpdate();
                 }
                 JOptionPane.showMessageDialog(panel, "Reorder trigger updated.");
@@ -2889,7 +2921,7 @@ public final class WorkspaceShell {
                     movement.setString(3, "WRITE OFF");
                     movement.setString(4, selectedReason);
                     movement.setString(5, user.getUsername());
-                    movement.setString(6, new dateTime().formattedDateTime());
+                    movement.setString(6, dateTime.nowDisplayString());
                     movement.executeUpdate();
                 }
                 JOptionPane.showMessageDialog(panel, "Stock write-off completed.");
@@ -3020,7 +3052,7 @@ public final class WorkspaceShell {
                 return;
             }
             String reference = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-            String now = new dateTime().formattedDateTime();
+            String now = dateTime.nowDisplayString();
             try {
                 processSaleTransaction(connection, user, items, reference, now, rawNote);
                 JOptionPane.showMessageDialog(panel, "Sale completed. Reference: " + reference);
@@ -3255,7 +3287,7 @@ public final class WorkspaceShell {
                     movement.setString(3, movementType);
                     movement.setString(4, reason);
                     movement.setString(5, user.getUsername());
-                    movement.setString(6, new dateTime().formattedDateTime());
+                    movement.setString(6, dateTime.nowDisplayString());
                     movement.executeUpdate();
                 }
                 try (PreparedStatement delete = connection.prepareStatement("DELETE FROM sales WHERE `Reference` = ? AND `Item Code` = ? AND Amount = 0")) {
@@ -4100,7 +4132,7 @@ public final class WorkspaceShell {
                 addLayer.setDouble(3, 0);
                 addLayer.setInt(4, stockCount);
                 addLayer.setInt(5, stockCount);
-                addLayer.setString(6, new dateTime().formattedDateTime());
+                addLayer.setString(6, dateTime.nowDisplayString());
                 addLayer.executeUpdate();
             }
         }
@@ -4112,7 +4144,7 @@ public final class WorkspaceShell {
             movement.setString(3, "ADD");
             movement.setString(4, "INITIAL_STOCK");
             movement.setString(5, user.getUsername());
-            movement.setString(6, new dateTime().formattedDateTime());
+            movement.setString(6, dateTime.nowDisplayString());
             movement.executeUpdate();
         }
     }
@@ -4274,7 +4306,7 @@ public final class WorkspaceShell {
             addLayer.setDouble(3, purchasePrice);
             addLayer.setInt(4, amountReceived);
             addLayer.setInt(5, amountReceived);
-            addLayer.setString(6, new dateTime().formattedDateTime());
+            addLayer.setString(6, dateTime.nowDisplayString());
             addLayer.executeUpdate();
         }
         try (PreparedStatement movement = connection.prepareStatement("INSERT INTO movements (`Item`, `Amount`, `Type`, `Reason`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
@@ -4283,7 +4315,7 @@ public final class WorkspaceShell {
             movement.setString(3, "RECEIVED");
             movement.setString(4, "PURCHASE_ORDER_RECEIPT");
             movement.setString(5, user.getUsername());
-            movement.setString(6, new dateTime().formattedDateTime());
+            movement.setString(6, dateTime.nowDisplayString());
             movement.executeUpdate();
         }
         try (PreparedStatement deleteCompletedOrder = connection.prepareStatement("DELETE FROM pendingOrders WHERE `Reference` = ? AND `Item Code` = ? AND Amount = 0")) {
@@ -4388,22 +4420,26 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Runnable executed on worker threads where checked exceptions propagate to error handling. */
     @FunctionalInterface
     private interface CheckedAction {
         void run() throws Exception;
     }
 
+    /** Sidebar entry that either opens a lazily-built panel view or invokes a modal action thread. */
     private static final class NavItem {
         private final String label;
         private final CheckedAction action;
         private final ViewBuilder viewBuilder;
 
+        /** Sidebar button that launches a background {@link CheckedAction} (logout, seeded runners, etc.). */
         private NavItem(String label, CheckedAction action) {
             this.label = label;
             this.action = action;
             this.viewBuilder = null;
         }
 
+        /** Sidebar button whose click shows a synchronous SQL-backed panel ({@link #build}). */
         private NavItem(String label, ViewBuilder viewBuilder) {
             this.label = label;
             this.action = () -> {};
@@ -4411,11 +4447,13 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Builds a workspace center panel lazily inside {@link WorkspaceShell#getItems} navigation clicks. */
     @FunctionalInterface
     private interface ViewBuilder {
         JPanel build() throws SQLException;
     }
 
+    /** Mutable accumulator for CSV export tables and paired JFree chart snapshots. */
     private static final class ReportData {
         private final String title;
         private final Map<String, String> summary = new LinkedHashMap<>();
@@ -4426,6 +4464,7 @@ public final class WorkspaceShell {
         private String monthlyChartTitle = "";
         private List<Map.Entry<String, Double>> monthlyChartPoints = new ArrayList<>();
 
+        /** @param title report heading shown above summary rows */
         private ReportData(String title) {
             this.title = title;
         }

@@ -6,6 +6,7 @@ import java.sql.SQLException;
  */
 public final class postLogin {
 
+    /** Prevents instantiation. */
     private postLogin() {
     }
 

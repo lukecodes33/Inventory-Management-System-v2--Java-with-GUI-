@@ -37,7 +37,7 @@ public final class AppUI {
     private AppUI() {
     }
 
-    /** Initializes global look-and-feel and component defaults. */
+    /** Initializes global look-and-feel and component defaults (call once before any Swing UI). */
     public static void initialize() {
         installNimbusLookAndFeel();
 
@@ -68,7 +68,7 @@ public final class AppUI {
         installGlobalWindowStyler();
     }
 
-    /** Applies primary action styling to a button. */
+    /** @param button primary-colored action control */
     public static void stylePrimaryButton(JButton button) {
         button.setBackground(PRIMARY);
         button.setForeground(PRIMARY_TEXT);
@@ -76,7 +76,7 @@ public final class AppUI {
         button.setBorder(newRoundedBorder(8));
     }
 
-    /** Creates a rounded border used throughout the dark UI. */
+    /** @param radius corner padding mirrored for empty insets inside the line border */
     public static Border newRoundedBorder(int radius) {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(BORDER),
@@ -84,12 +84,12 @@ public final class AppUI {
         );
     }
 
-    /** Applies theme styling recursively to a panel/component tree. */
+    /** @param component root Swing node whose subtree should inherit background/text defaults */
     public static void applyPanelBackground(JComponent component) {
         styleTree(component);
     }
 
-    /** Applies theme styling to all components within a window. */
+    /** Applies {@link #styleTree(Component)} depth-first beginning at each immediate child of {@code window}. */
     public static void styleWindow(Window window) {
         if (window == null) {
             return;

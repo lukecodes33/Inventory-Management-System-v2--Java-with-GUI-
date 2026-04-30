@@ -267,8 +267,7 @@ public class Login {
      * @throws SQLException when the update fails
      */
     private static void updateLastLogin(Connection connection, String username) throws SQLException {
-        dateTime formattedDateTimeInstance = new dateTime();
-        String formattedDateTime = formattedDateTimeInstance.formattedDateTime();
+        String formattedDateTime = dateTime.nowDisplayString();
 
         String updateSql = "UPDATE users SET last_login = ? WHERE username = ?";
         try (PreparedStatement preparedStatement = connection.prepareStatement(updateSql)) {
@@ -287,8 +286,7 @@ public class Login {
      * @throws SQLException when the insert fails
      */
     private static void updateLoginHistory(Connection loginsConnection, String username) throws SQLException {
-        dateTime formattedDateTimeInstance = new dateTime();
-        String formattedDateTime = formattedDateTimeInstance.formattedDateTime();
+        String formattedDateTime = dateTime.nowDisplayString();
 
         String updateLoginsSql = "INSERT INTO Logins (Name, Time) VALUES (?, ?)";
         try (PreparedStatement preparedStatement = loginsConnection.prepareStatement(updateLoginsSql)) {

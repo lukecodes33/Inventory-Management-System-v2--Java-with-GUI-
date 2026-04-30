@@ -94,9 +94,14 @@ public final class InventoryFifo {
     }
 
     /**
-     * FIFO cost for a sale quantity; when layers do not cover the quantity, uses
-     * {@code latestRecordedUnitCost × quantity} without mutating layers. Returns {@code 0}
-     * when there is no layer history to infer from.
+     * FIFO cost for a sale quantity; when layers cannot supply the quantity, falls back to
+     * {@code latestRecordedUnitCost × quantity} without mutating layers. Returns {@code 0} when no layer baseline exists.
+     *
+     * @param connection open JDBC session
+     * @param itemCode     SKU identifier
+     * @param quantity     units needing a cost allocation
+     * @return summed FIFO cost or best-effort estimate
+     * @throws SQLException when cost-layer queries fail
      */
     public static double fifoCostWithLatestLayerFallback(Connection connection, String itemCode, int quantity)
             throws SQLException {

@@ -39,6 +39,12 @@ public final class DemoDataSeeder {
     private DemoDataSeeder() {
     }
 
+    /**
+     * Seeds ~10k deterministic demo rows ({@value #TARGET_TOTAL_ROWS}) into the enterprise SQLite database.
+     *
+     * @param args unused
+     * @throws Exception when bootstrap, SQL, or invariant checks fail
+     */
     public static void main(String[] args) throws Exception {
         if (TARGET_TOTAL_ROWS != 10_000) {
             throw new IllegalStateException("Row budget must sum to 10000, got " + TARGET_TOTAL_ROWS);
@@ -77,6 +83,7 @@ public final class DemoDataSeeder {
         System.out.println("Demo seed complete (" + TARGET_TOTAL_ROWS + " inserted rows, prefix " + ITEM_PREFIX + ").");
     }
 
+    /** Deletes rows whose primary keys start with {@link #ITEM_PREFIX}. */
     private static void purgeDemoData(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("DELETE FROM inventory_cost_layers WHERE item_code LIKE '" + ITEM_PREFIX + "%'");
@@ -87,6 +94,7 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Inserts demo {@code Inventory} rows with {@code On Order = 0}. */
     private static void seedInventory(Connection connection, ThreadLocalRandom rnd, int[] stockNow) throws SQLException {
         String sql = "INSERT INTO Inventory (\"Item Code\", \"Item Name\", \"Stock\", \"On Order\", "
                 + "\"ReOrder Trigger\", \"Supplier\", \"Lead Time\", \"Notes\", \"Market Price\") VALUES (?, ?, ?, 0, ?, ?, ?, ?, NULL)";
@@ -105,6 +113,11 @@ public final class DemoDataSeeder {
         }
     }
 
+    /**
+     * Inserts synthetic FIFO layers per item: mostly consumed history plus one open layer matching {@code stockNow}.
+     *
+     * @param soldTotals cumulative units “sold” driving historical layer sizes
+     */
     private static void seedCostLayers(
             Connection connection,
             ThreadLocalRandom rnd,
@@ -147,6 +160,7 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Writes parallel {@code sales} rows and {@code SALE} movement audit lines. */
     private static void seedSalesAndSaleMovements(
             Connection connection,
             ThreadLocalRandom rnd,
@@ -196,6 +210,7 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Seeds additional {@code movements} rows with assorted {@link #MISC_TYPES} for report variety. */
     private static void seedMiscMovements(Connection connection, ThreadLocalRandom rnd, LocalDateTime horizon) throws SQLException {
         String sql = "INSERT INTO movements (\"Item\", \"Amount\", \"Type\", \"Reason\", \"User\", \"Date\") VALUES (?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -217,6 +232,7 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Inserts {@link #PENDING_ORDER_ROWS} open purchase lines referencing demo SKUs. */
     private static void seedPendingOrders(Connection connection, ThreadLocalRandom rnd, LocalDateTime horizon) throws SQLException {
         String sql = "INSERT INTO pendingOrders (\"Item Code\", \"Amount\", \"Purchase Price\", \"Reference\", \"User\", \"Date\") "
                 + "VALUES (?, ?, ?, ?, ?, ?)";
@@ -237,14 +253,17 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Demo item code formatter ({@code DMO0001…}). */
     private static String itemCode(int index) {
         return ITEM_PREFIX + String.format("%04d", index + 1);
     }
 
+    /** Formats timestamps using {@link #DISPLAY_TS}. */
     private static String formatDisplay(LocalDateTime t) {
         return DISPLAY_TS.format(t);
     }
 
+    /** Converts seeded display timestamps into ISO-compatible {@code yyyy-MM-dd…} tails for indexed columns. */
     private static String toIsoDateTime(String displayDateTime) {
         if (displayDateTime == null || displayDateTime.length() < 19) {
             return null;
@@ -255,6 +274,7 @@ public final class DemoDataSeeder {
                 + displayDateTime.substring(10);
     }
 
+    /** Prints row counts after seed completes (diagnostic CLI output). */
     private static void printCounts() throws SQLException {
         try (Connection connection = DatabaseManager.getConnection();
              Statement st = connection.createStatement()) {
@@ -266,6 +286,7 @@ public final class DemoDataSeeder {
         }
     }
 
+    /** Executes {@code SELECT COUNT(*) FROM table} helper for {@link #printCounts()}. */
     private static void printCount(Statement st, String table) throws SQLException {
         try (ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + table)) {
             if (rs.next()) {

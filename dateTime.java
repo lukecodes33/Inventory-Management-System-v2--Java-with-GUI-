@@ -2,26 +2,35 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Utility class for handling date and time operations.
- *
- * This class provides methods to retrieve the current date and time
- * in a formatted string representation.
+ * Display-format timestamps for DB and UI audit fields ({@code dd-MM-yyyy HH:mm:ss}).
+ * Prefer {@link #nowDisplayString()} to avoid allocating a throwaway instance.
  */
-
 public final class dateTime {
 
+    private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
+
     /**
-     * Retrieves the current date and time formatted as a string.
+     * Legacy no-arg constructor; prefer {@link #nowDisplayString()} to avoid extra allocation.
+     */
+    public dateTime() {
+    }
+
+    /**
+     * Current wall-clock time in application display format.
      *
-     * The date and time are formatted in the pattern "dd-MM-yyyy HH:mm:ss".
+     * @return formatted {@code dd-MM-yyyy HH:mm:ss} string
+     */
+    public static String nowDisplayString() {
+        return LocalDateTime.now().format(DISPLAY);
+    }
+
+    /**
+     * Same output as {@link #nowDisplayString()}; retained for callers that still use {@code new dateTime()}.
      *
-     * @return A string representing the current date and time in the specified format.
+     * @return formatted {@code dd-MM-yyyy HH:mm:ss} string
      */
     public String formattedDateTime() {
-        LocalDateTime dateTime = LocalDateTime.now();
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
-
-        return dateTime.format(formatter);
+        return nowDisplayString();
     }
 
 }

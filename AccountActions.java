@@ -257,6 +257,7 @@ public class AccountActions {
         return result[0];
     }
 
+    /** Updates checklist labels next to “New Password” showing which policy rules still fail. */
     private static void updateRequirementLabels(
             char[] newPass,
             JLabel reqLength,
@@ -290,10 +291,16 @@ public class AccountActions {
         reqSymbol.setText(formatReq("One symbol (non-space)", sym));
     }
 
+    /** Renders ✓ vs ○ prefix for password checklist rows. */
     private static String formatReq(String text, boolean ok) {
         return (ok ? "✓ " : "○ ") + text;
     }
 
+    /**
+     * Validates current password + policy, persists hash update, clears {@code first_login}, updates {@code result} holder.
+     *
+     * @param attemptsRemaining decreasing counter for wrong current-password attempts
+     */
     private void handlePasswordSubmit(
             User user,
             JDialog dialog,
@@ -420,7 +427,7 @@ public class AccountActions {
             return;
         }
 
-        Path destinationDirectory = backupDirectory.resolve(sourceDirectory.getFileName() + "-" + new dateTime().formattedDateTime());
+        Path destinationDirectory = backupDirectory.resolve(sourceDirectory.getFileName() + "-" + dateTime.nowDisplayString());
 
         try {
             Files.walkFileTree(sourceDirectory, new SimpleFileVisitor<>() {
@@ -449,6 +456,7 @@ public class AccountActions {
         }
     }
 
+    /** Records a DATABASE_BACKUP_FAILED security audit row with {@code detail}. */
     private void logBackupFailure(User user, String detail) throws SQLException {
         try (Connection c = DatabaseManager.getConnection()) {
             DatabaseManager.logSecurityEvent(c, user.getUsername(), "DATABASE_BACKUP_FAILED", detail != null ? detail : "unknown error");
@@ -575,12 +583,14 @@ public class AccountActions {
         JOptionPane.showMessageDialog(parent, msg, "Prune Backups", JOptionPane.INFORMATION_MESSAGE);
     }
 
+    /** Throws {@link SecurityException} when {@code user} is null or not an administrator. */
     private static void requireAdminRights(User user) {
         if (user == null || !user.hasAdminRights()) {
             throw new SecurityException("Administrator rights are required for this action.");
         }
     }
 
+    /** Deletes every child path under {@code dir} recursively (typically before restore). */
     private static void clearDirectoryContents(Path dir) throws IOException {
         if (!Files.isDirectory(dir)) {
             return;
@@ -592,6 +602,7 @@ public class AccountActions {
         }
     }
 
+    /** Recursive delete for folders or files (visitor-based). */
     private static void deleteDirectoryRecursive(Path root) throws IOException {
         if (!Files.exists(root)) {
             return;
@@ -614,6 +625,7 @@ public class AccountActions {
         });
     }
 
+    /** Mirrors {@code source} tree into {@code targetRoot}, creating directories/files as needed. */
     private static void copyDirectoryTree(Path source, Path targetRoot) throws IOException {
         Files.walkFileTree(source, new SimpleFileVisitor<>() {
             @Override
