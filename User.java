@@ -9,7 +9,6 @@
 public class User {
     private final String username;
     private final boolean adminRights;
-    private final String password;
 
     /**
      * Constructor to create a new User instance.
@@ -18,10 +17,9 @@ public class User {
      * @param adminRights A boolean indicating whether the user has admin rights.
      */
 
-    public User(String username, boolean adminRights, String password) {
+    public User(String username, boolean adminRights) {
         this.username = username;
         this.adminRights = adminRights;
-        this.password = password;
     }
 
     /**
@@ -44,13 +42,4 @@ public class User {
         return adminRights;
     }
 
-    /**
-     * Gets the password of the user.
-     *
-     * @return The password associated with this user.
-     */
-
-    public String getPassword() {
-        return password;
-    }
 }

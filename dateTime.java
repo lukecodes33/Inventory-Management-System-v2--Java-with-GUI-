@@ -8,7 +8,7 @@ import java.time.format.DateTimeFormatter;
  * in a formatted string representation.
  */
 
-public class dateTime {
+public final class dateTime {
 
     /**
      * Retrieves the current date and time formatted as a string.
@@ -17,7 +17,6 @@ public class dateTime {
      *
      * @return A string representing the current date and time in the specified format.
      */
-
     public String formattedDateTime() {
         LocalDateTime dateTime = LocalDateTime.now();
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");

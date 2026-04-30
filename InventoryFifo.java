@@ -1,0 +1,278 @@
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.LocalDate;
+import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * FIFO cost-layer consumption for sales and valuation helpers used by the workspace.
+ */
+public final class InventoryFifo {
+
+    /** Prevents instantiation; namespace for static FIFO and reporting helpers. */
+    private InventoryFifo() {
+    }
+
+    /**
+     * Consumes FIFO cost layers for sold quantity and returns total cost.
+     *
+     * @param connection        open JDBC connection (transaction may be managed by caller)
+     * @param itemCode          inventory item code
+     * @param quantityToConsume units to consume from oldest layers first
+     * @return total FIFO cost, or -1 when layers do not cover the requested quantity
+     */
+    public static double consumeFifoCost(Connection connection, String itemCode, int quantityToConsume) throws SQLException {
+        try (PreparedStatement availableStatement = connection.prepareStatement(
+                "SELECT COALESCE(SUM(qty_remaining), 0) AS available_qty FROM inventory_cost_layers WHERE item_code = ? AND qty_remaining > 0"
+        )) {
+            availableStatement.setString(1, itemCode);
+            try (ResultSet rs = availableStatement.executeQuery()) {
+                int availableQty = rs.next() ? rs.getInt("available_qty") : 0;
+                if (availableQty < quantityToConsume) {
+                    return -1;
+                }
+            }
+        }
+
+        String selectLayers = "SELECT id, unit_cost, qty_remaining FROM inventory_cost_layers WHERE item_code = ? AND qty_remaining > 0 ORDER BY created_at ASC, id ASC";
+        int remaining = quantityToConsume;
+        double totalCost = 0;
+        int consumed = 0;
+
+        try (PreparedStatement layerStatement = connection.prepareStatement(selectLayers)) {
+            layerStatement.setString(1, itemCode);
+            try (ResultSet rs = layerStatement.executeQuery()) {
+                while (rs.next() && remaining > 0) {
+                    int layerId = rs.getInt("id");
+                    int layerQtyRemaining = rs.getInt("qty_remaining");
+                    double unitCost = rs.getDouble("unit_cost");
+                    int take = Math.min(layerQtyRemaining, remaining);
+
+                    try (PreparedStatement updateLayer = connection.prepareStatement(
+                            "UPDATE inventory_cost_layers SET qty_remaining = qty_remaining - ? WHERE id = ?"
+                    )) {
+                        updateLayer.setInt(1, take);
+                        updateLayer.setInt(2, layerId);
+                        updateLayer.executeUpdate();
+                    }
+
+                    consumed += take;
+                    remaining -= take;
+                    totalCost += (unitCost * take);
+                }
+            }
+        }
+
+        if (consumed == 0) {
+            return -1;
+        }
+        return totalCost;
+    }
+
+    /**
+     * Most recently recorded receipt unit cost for an item (any cost layer, newest first).
+     *
+     * @return unit cost, or {@link Double#NaN} when no layers exist for the item
+     */
+    public static double latestRecordedUnitCost(Connection connection, String itemCode) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT unit_cost FROM inventory_cost_layers WHERE item_code = ? ORDER BY created_at DESC, id DESC LIMIT 1"
+        )) {
+            ps.setString(1, itemCode);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Double.NaN;
+                }
+                return rs.getDouble("unit_cost");
+            }
+        }
+    }
+
+    /**
+     * FIFO cost for a sale quantity; when layers do not cover the quantity, uses
+     * {@code latestRecordedUnitCost × quantity} without mutating layers. Returns {@code 0}
+     * when there is no layer history to infer from.
+     */
+    public static double fifoCostWithLatestLayerFallback(Connection connection, String itemCode, int quantity)
+            throws SQLException {
+        double fifo = consumeFifoCost(connection, itemCode, quantity);
+        if (fifo >= 0) {
+            return fifo;
+        }
+        double unit = latestRecordedUnitCost(connection, itemCode);
+        if (!Double.isNaN(unit)) {
+            return unit * quantity;
+        }
+        return 0;
+    }
+
+    /**
+     * On-hand valuation: current {@code Stock} × {@code Inventory.Market Price} per SKU.
+     * Items with NULL market price contribute {@code 0}; compare to FIFO carrying value via
+     * {@link #totalFifoStockValue(Connection)}.
+     */
+    public static double totalMarketValueOfOnHandStock(Connection connection) throws SQLException {
+        String sql =
+                "SELECT COALESCE(SUM(CAST(`Stock` AS REAL) * COALESCE(`Market Price`, 0)), 0) AS v FROM inventory";
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            return rs.next() ? rs.getDouble("v") : 0;
+        }
+    }
+
+    /**
+     * Sum of unit_cost × qty_remaining for all open FIFO layers (on-hand inventory value).
+     *
+     * @param connection open JDBC connection
+     */
+    public static double totalFifoStockValue(Connection connection) throws SQLException {
+        String sql = "SELECT COALESCE(SUM(unit_cost * qty_remaining), 0) AS v FROM inventory_cost_layers WHERE qty_remaining > 0";
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            return rs.next() ? rs.getDouble("v") : 0;
+        }
+    }
+
+    /**
+     * Lifetime realized P/L: sum of (sale revenue − FIFO cost) across all sales rows.
+     *
+     * @param connection open JDBC connection
+     */
+    public static double lifetimeProfitLoss(Connection connection) throws SQLException {
+        String sql = "SELECT COALESCE(SUM(`Total Price` - COALESCE(`Total Cost`, 0)), 0) AS p FROM sales";
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            return rs.next() ? rs.getDouble("p") : 0;
+        }
+    }
+
+    /**
+     * Sum of all recorded sale revenue (for gross margin denominator).
+     *
+     * @param connection open JDBC connection
+     */
+    public static double lifetimeTotalRevenue(Connection connection) throws SQLException {
+        String sql = "SELECT COALESCE(SUM(`Total Price`), 0) AS r FROM sales";
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            return rs.next() ? rs.getDouble("r") : 0;
+        }
+    }
+
+    /**
+     * P/L for sales whose {@code DateISO} falls on an inclusive calendar-day range
+     * (start 00:00:00 through end 23:59:59). Rows with null {@code DateISO} are excluded.
+     *
+     * @param connection open JDBC connection
+     * @param start      first calendar day (inclusive)
+     * @param end        last calendar day (inclusive)
+     */
+    public static double profitLossBetweenDates(Connection connection, LocalDate start, LocalDate end) throws SQLException {
+        String from = start.toString() + " 00:00:00";
+        String to = end.toString() + " 23:59:59";
+        String sql = "SELECT COALESCE(SUM(`Total Price` - COALESCE(`Total Cost`, 0)), 0) AS p FROM sales "
+                + "WHERE `DateISO` IS NOT NULL AND `DateISO` BETWEEN ? AND ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, from);
+            ps.setString(2, to);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getDouble("p") : 0;
+            }
+        }
+    }
+
+    /**
+     * Open purchase-order line exposure: sum of (quantity × unit purchase price).
+     *
+     * @param connection open JDBC connection
+     */
+    public static double openPurchaseOrderExposure(Connection connection) throws SQLException {
+        String sql = "SELECT COALESCE(SUM(CAST(`Amount` AS REAL) * `Purchase Price`), 0) AS v FROM pendingOrders";
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            return rs.next() ? rs.getDouble("v") : 0;
+        }
+    }
+
+    /**
+     * Top {@code limit} item codes by sold units in the inclusive date range (by {@code DateISO}).
+     * {@code limit} is clamped to 1–50.
+     *
+     * @param connection open JDBC connection
+     * @param start      range start (inclusive calendar day)
+     * @param end        range end (inclusive calendar day)
+     * @param limit      maximum rows (clamped 1–50)
+     */
+    public static List<TopMoverRow> topMoversByUnitsBetweenDates(
+            Connection connection,
+            LocalDate start,
+            LocalDate end,
+            int limit
+    ) throws SQLException {
+        if (limit < 1) {
+            return Collections.emptyList();
+        }
+        int cap = Math.min(50, limit);
+        String from = start.toString() + " 00:00:00";
+        String to = end.toString() + " 23:59:59";
+        String sql = "SELECT `Item Code`, SUM(`Amount`) AS units FROM sales "
+                + "WHERE `DateISO` IS NOT NULL AND `DateISO` BETWEEN ? AND ? "
+                + "GROUP BY `Item Code` ORDER BY units DESC LIMIT ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, from);
+            ps.setString(2, to);
+            ps.setInt(3, cap);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<TopMoverRow> out = new ArrayList<>();
+                while (rs.next()) {
+                    String code = rs.getString("Item Code");
+                    int units = rs.getInt("units");
+                    if (units > 0) {
+                        out.add(new TopMoverRow(code, units));
+                    }
+                }
+                return out;
+            }
+        }
+    }
+
+    /** @param date anchor day in the month */
+    public static LocalDate firstDayOfMonth(LocalDate date) {
+        return date.with(TemporalAdjusters.firstDayOfMonth());
+    }
+
+    /** @param date anchor day in the month */
+    public static LocalDate lastDayOfMonth(LocalDate date) {
+        return date.with(TemporalAdjusters.lastDayOfMonth());
+    }
+
+    /** @param date any day in the target ISO week */
+    public static LocalDate startOfIsoWeek(LocalDate date) {
+        return date.with(java.time.DayOfWeek.MONDAY);
+    }
+
+    /** @param date any day in the target ISO week */
+    public static LocalDate endOfIsoWeek(LocalDate date) {
+        return startOfIsoWeek(date).plusDays(6);
+    }
+
+    /** One SKU line in a top-movers ranking (by units sold in a date range). */
+    public static final class TopMoverRow {
+        public final String itemCode;
+        public final int units;
+
+        /**
+         * @param itemCode inventory item code
+         * @param units    total units sold in the ranking window
+         */
+        public TopMoverRow(String itemCode, int units) {
+            this.itemCode = itemCode;
+            this.units = units;
+        }
+    }
+}

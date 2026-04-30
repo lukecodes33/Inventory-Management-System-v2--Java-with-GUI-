@@ -1,91 +1,109 @@
-import javax.swing.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JDialog;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JPasswordField;
+import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import java.awt.BorderLayout;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 
 /**
- * A class that represents a login pop-up for an inventory management system.
- * This pop-up collects the username and password from the user and returns
- * the credentials upon successful login.
+ * Modal sign-in dialog. Uses a modal {@link JDialog} so it is safe when shown from the EDT
+ * (unlike {@code CountDownLatch.await()} on the EDT, which freezes the UI).
  */
-
 public class LoginPopUp {
 
     /**
-     * Creates and displays the login pop-up window.
-     *
-     * @return a Map containing the entered username and password, where
-     *         the key "username" maps to the username string and the key
-     *         "password" maps to the password string.
+     * Shows a modal login dialog and returns submitted credentials.
+     * If the user closes the window without signing in, username is {@code null}.
      */
+    public LoginCredentials createLoginPopUp() {
+        JDialog dialog = new JDialog((java.awt.Frame) null, "Inventory Management System", true);
+        dialog.setSize(420, 230);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setLayout(new BorderLayout());
 
-    public Map<String, String> createLoginPopUp() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        AppUI.applyPanelBackground(panel);
+        panel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
 
-        // CountDownLatch to block until the user has logged in
-        CountDownLatch latch = new CountDownLatch(1);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
 
+        JLabel header = new JLabel("Sign In", SwingConstants.LEFT);
+        header.setFont(header.getFont().deriveFont(Font.BOLD, 20f));
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 2;
+        panel.add(header, gbc);
 
-        JFrame frame = new JFrame("Inventory Management System");
-        frame.setSize(350, 150);
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setLayout(null);
+        JLabel userLabel = new JLabel("Username");
+        gbc.gridy = 1;
+        gbc.gridwidth = 1;
+        gbc.gridx = 0;
+        panel.add(userLabel, gbc);
 
-        JLabel userLabel = new JLabel("Username:");
-        userLabel.setBounds(10, 10, 80, 25);
-        frame.add(userLabel);
         JTextField userText = new JTextField(20);
-        userText.setBounds(100, 10, 220, 25);
-        frame.add(userText);
+        userText.setBorder(AppUI.newRoundedBorder(8));
+        gbc.gridx = 1;
+        gbc.weightx = 1.0;
+        panel.add(userText, gbc);
 
+        JLabel passwordLabel = new JLabel("Password");
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.weightx = 0;
+        panel.add(passwordLabel, gbc);
 
-        JLabel passwordLabel = new JLabel("Password:");
-        passwordLabel.setBounds(10, 40, 80, 25);
-        frame.add(passwordLabel);
         JPasswordField passwordText = new JPasswordField(20);
-        passwordText.setBounds(100, 40, 220, 25);
-        frame.add(passwordText);
+        passwordText.setBorder(AppUI.newRoundedBorder(8));
+        gbc.gridx = 1;
+        gbc.weightx = 1.0;
+        panel.add(passwordText, gbc);
 
-        JButton loginButton = new JButton("Login");
-        loginButton.setBounds(220, 80, 100, 25);
-        frame.add(loginButton);
+        JButton loginButton = new JButton("Sign In");
+        AppUI.stylePrimaryButton(loginButton);
+        gbc.gridx = 1;
+        gbc.gridy = 3;
+        gbc.anchor = GridBagConstraints.EAST;
+        gbc.fill = GridBagConstraints.NONE;
+        panel.add(loginButton, gbc);
+        dialog.add(panel, BorderLayout.CENTER);
 
-        // Map to store login data
-        Map<String, String> loginData = new HashMap<>();
+        final String[] usernameHolder = {null};
+        final char[][] passwordHolder = {null};
+        final boolean[] submitted = {false};
 
+        loginButton.addActionListener(e -> {
+            usernameHolder[0] = userText.getText();
+            passwordHolder[0] = passwordText.getPassword();
+            passwordText.setText("");
+            submitted[0] = true;
+            dialog.dispose();
+        });
 
-        loginButton.addActionListener(new ActionListener() {
+        dialog.addWindowListener(new WindowAdapter() {
             @Override
-
-            //Stores username as a string and password as an array before converting to string, i would like to find another
-            //way to do this so that the password is more secure but while it is being built this will do for now
-            public void actionPerformed(ActionEvent e) {
-                String username = userText.getText();
-                char[] password = passwordText.getPassword();
-                String passwordString = new String(password);
-
-                loginData.put("username", username);
-                loginData.put("password", passwordString);
-
-                passwordText.setText("");
-
-                frame.dispose();
-                latch.countDown();
+            public void windowClosing(WindowEvent e) {
+                submitted[0] = false;
             }
         });
 
-        frame.setLocationRelativeTo(null);
+        AppUI.styleWindow(dialog);
+        dialog.setLocationRelativeTo(null);
+        dialog.setVisible(true);
 
-
-        frame.setVisible(true);
-
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (!submitted[0]) {
+            return new LoginCredentials(null, new char[0]);
         }
-
-        return loginData;
+        return new LoginCredentials(usernameHolder[0], passwordHolder[0] == null ? new char[0] : passwordHolder[0]);
     }
 }

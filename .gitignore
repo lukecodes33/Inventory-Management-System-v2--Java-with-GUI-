@@ -1,0 +1,13 @@
+*.class
+*.log
+*.tmp
+.DS_Store
+
+database/*.sqlite
+database/*.sqlite-wal
+database/*.sqlite-shm
+
+database_backups/
+
+# Item photos (JPEG per item code); created at runtime
+item_images/
