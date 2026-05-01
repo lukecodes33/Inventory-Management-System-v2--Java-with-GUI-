@@ -449,7 +449,8 @@ public final class DatabaseManager {
     }
 
     /**
-     * Seeds on-hand qty into bucket one only when nothing is tracked yet per SKU ({@code DMO%} / stress prefixes).
+     * Seeds on-hand qty into {@code inventory_storage_qty} only for SKUs matching {@code likePattern}
+     * when nothing is tracked yet for that SKU (typically demo {@code LIKE} prefixes such as {@code DMO%}).
      */
     public static void seedUnassignedBucketsForItemsLike(Connection connection, String likePattern) throws SQLException {
         if (!tableExists(connection, "inventory_storage_qty") || likePattern == null || likePattern.isBlank()) {
