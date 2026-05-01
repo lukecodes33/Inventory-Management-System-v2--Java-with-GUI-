@@ -448,49 +448,6 @@ public final class DatabaseManager {
         }
     }
 
-    /**
-     * Seeds on-hand qty into {@code inventory_storage_qty} only for SKUs matching {@code likePattern}
-     * when nothing is tracked yet for that SKU (typically demo {@code LIKE} prefixes such as {@code DMO%}).
-     */
-    public static void seedUnassignedBucketsForItemsLike(Connection connection, String likePattern) throws SQLException {
-        if (!tableExists(connection, "inventory_storage_qty") || likePattern == null || likePattern.isBlank()) {
-            return;
-        }
-        try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO inventory_storage_qty (item_code, location_id, qty)
-                        SELECT i.`Item Code`, ?, i.Stock FROM Inventory i
-                        WHERE i.Stock > 0 AND i.`Item Code` LIKE ?
-                          AND NOT EXISTS (SELECT 1 FROM inventory_storage_qty s WHERE s.item_code = i.`Item Code`)
-                """)) {
-            statement.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
-            statement.setString(2, likePattern);
-            statement.executeUpdate();
-        }
-    }
-
-    /**
-     * Seeds / demo helper: resets per-location rows for SKUs matching the prefix so totals match {@code Inventory.Stock}.
-     */
-    public static void reconcileStorageBucketsFromInventoryForSkuPrefix(Connection connection, String likePattern) throws SQLException {
-        if (!tableExists(connection, "inventory_storage_qty") || likePattern == null || likePattern.isBlank()) {
-            return;
-        }
-        ensureReservedUnassignedLocationRow(connection);
-        try (PreparedStatement delete = connection.prepareStatement("DELETE FROM inventory_storage_qty WHERE item_code LIKE ?")) {
-            delete.setString(1, likePattern);
-            delete.executeUpdate();
-        }
-        try (PreparedStatement insert = connection.prepareStatement("""
-                        INSERT INTO inventory_storage_qty (item_code, location_id, qty)
-                        SELECT i.`Item Code`, ?, i.Stock FROM Inventory i
-                        WHERE i.Stock > 0 AND i.`Item Code` LIKE ?
-                """)) {
-            insert.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
-            insert.setString(2, likePattern);
-            insert.executeUpdate();
-        }
-    }
-
     /** Migrates legacy user records into the enterprise users table. */
     private static void migrateUsersFromLegacy(Connection enterpriseConnection) throws SQLException {
         Path legacyPath = DATABASE_DIR.resolve("userDatabase.db");
