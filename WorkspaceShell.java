@@ -139,6 +139,9 @@ public final class WorkspaceShell {
     /** {@link JPanel#getClientProperty(Object)} key for sidebar nav selection sync. */
     private static final String CLIENT_NAV_SIDEBAR_SELECTOR = "ims.NavSidebarSelector";
 
+    /** CardLayout orphans prior components if the same sidebar key builds a new panel; we remove the old instance before re-adding. */
+    private static final String CLIENT_WORKSPACE_CARD_REGISTRY = "ims.workspaceCardRegistry";
+
     /** Workspace card key and sidebar label for creating POs and viewing pending lines (reference / tracking). */
     private static final String VIEW_PO_TRACKING = "PO/Tracking Number";
     /** Admin workspace card: user management, password reset, and backups in tabs. */
@@ -967,14 +970,34 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Displays a panel in the workspace card container under a stable key.
+     * CardLayout registry keyed by sidebar label — prior component removed before re-add to avoid duplicate hidden cards.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Component> workspaceCardRegistry(JPanel workspaceContainer) {
+        Object raw = workspaceContainer.getClientProperty(CLIENT_WORKSPACE_CARD_REGISTRY);
+        if (raw instanceof Map<?, ?> map) {
+            return (Map<String, Component>) map;
+        }
+        Map<String, Component> created = new HashMap<>();
+        workspaceContainer.putClientProperty(CLIENT_WORKSPACE_CARD_REGISTRY, created);
+        return created;
+    }
+
+    /**
+     * Displays a panel in the workspace card container under a stable key (replaces any prior panel for that key).
      *
      * @param workspaceContainer card layout host panel
-     * @param key unique card key
+     * @param key unique card key (matches sidebar nav label)
      * @param panel panel to display
      */
     private static void showView(JPanel workspaceContainer, String key, JPanel panel) {
         AppUI.applyPanelBackground(panel);
+        Map<String, Component> cards = workspaceCardRegistry(workspaceContainer);
+        Component prior = cards.get(key);
+        if (prior != null && prior.getParent() == workspaceContainer) {
+            workspaceContainer.remove(prior);
+        }
+        cards.put(key, panel);
         workspaceContainer.add(panel, key);
         CardLayout layout = (CardLayout) workspaceContainer.getLayout();
         layout.show(workspaceContainer, key);
@@ -4058,6 +4081,7 @@ public final class WorkspaceShell {
 
     /** Manage named bins; {@link DatabaseManager#STORAGE_LOCATION_UNASSIGNED_ID Unassigned} is fixed in the database for untracked stock. */
     private static JPanel buildStorageLocationsPanel(Connection connection) throws SQLException {
+        DatabaseManager.ensureStorageLocationsAndBuckets(connection);
         JPanel panel = buildFormPanel("Storage Locations");
         JPanel intro = buildSectionPanel();
         intro.add(buildSectionText(
@@ -4349,9 +4373,11 @@ public final class WorkspaceShell {
 
         JScrollPane scroll = new JScrollPane(table);
         scroll.setBorder(AppUI.newRoundedBorder(8));
+        scroll.setMinimumSize(new Dimension(200, 160));
 
         JScrollPane binDetailScroll = new JScrollPane(binDetailTable);
         binDetailScroll.setBorder(AppUI.newRoundedBorder(8));
+        binDetailScroll.setMinimumSize(new Dimension(160, 160));
 
         JPanel binDetailWrap = new JPanel(new BorderLayout(0, 6));
         AppUI.applyPanelBackground(binDetailWrap);
@@ -4366,7 +4392,15 @@ public final class WorkspaceShell {
         locSplit.setContinuousLayout(true);
         locSplit.setBorder(null);
         locSplit.setDividerSize(6);
-        SwingUtilities.invokeLater(() -> locSplit.setDividerLocation(2.0 / 3.0));
+        locSplit.setMinimumSize(new Dimension(420, 200));
+        SwingUtilities.invokeLater(() -> {
+            int w = locSplit.getWidth();
+            if (w > 0) {
+                locSplit.setDividerLocation(Math.max(200, (int) (w * (2.0 / 3.0))));
+            } else {
+                locSplit.setDividerLocation(2.0 / 3.0);
+            }
+        });
 
         JPanel top = new JPanel(new BorderLayout(0, 8));
         AppUI.applyPanelBackground(top);
@@ -4443,6 +4477,7 @@ public final class WorkspaceShell {
 
     /** Shelf placement report filtered by SKU text / optional bin. */
     private static JPanel buildStockByLocationPanel(User user, Connection connection) throws SQLException {
+        DatabaseManager.ensureStorageLocationsAndBuckets(connection);
         JPanel panel = buildFormPanel("Stock by Location");
         JLabel hint = buildSectionText(
                 "Search by item code or name substring. Select a row to move qty to another bin.");

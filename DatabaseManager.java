@@ -361,9 +361,9 @@ public final class DatabaseManager {
 
     /**
      * Creates {@code storage_locations} / {@code inventory_storage_qty} when absent, seeds the reserved
-     * {@value #STORAGE_LOCATION_UNASSIGNED_ID} bucket, indexes, and syncs SKU rows missing any bin placement.
+     * {@value #STORAGE_LOCATION_UNASSIGNED_ID} bucket, indexes, syncs SKU rows missing bin placement. Idempotent.
      */
-    private static void ensureStorageLocationsAndBuckets(Connection connection) throws SQLException {
+    public static void ensureStorageLocationsAndBuckets(Connection connection) throws SQLException {
         if (!tableExists(connection, "storage_locations")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("""
