@@ -13,7 +13,7 @@ public class Login {
     private static final int MAX_FAILED_ATTEMPTS = 5;
     private static final Duration ACCOUNT_LOCK_DURATION = Duration.ofMinutes(15);
 
-    /** Application entry point for startup, authentication, and session launch. */
+    /** @param args unused JVM launch arguments */
     public static void main(String[] args) {
         AppUI.initialize();
         try {
@@ -21,7 +21,7 @@ public class Login {
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(
                     null,
-                    "Unable to initialize the enterprise database.\n\nDetails: " + e.getMessage()
+                    "Unable to initialize the enterprise database.\n\nDetails:\n" + e.getMessage()
             );
             return;
         }
@@ -30,11 +30,61 @@ public class Login {
     }
 
     /**
+     * When no users exist, runs the first-administrator wizard until success or exits the JVM if cancelled.
+     */
+    private static void ensureInitialAdministratorOrExit(Connection connection) throws SQLException {
+        while (DatabaseManager.countUsers(connection) == 0) {
+            FirstAdministratorSetupDialog.Outcome outcome = FirstAdministratorSetupDialog.show(connection);
+            if (outcome == null) {
+                System.exit(0);
+            }
+            char[] password = outcome.password();
+            try {
+                String hash = SecurityUtils.hashPassword(password);
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO users (first_name, last_name, username, password, admin_rights, first_login) VALUES (?, ?, ?, ?, 1, 0)"
+                )) {
+                    insert.setString(1, outcome.firstName().isEmpty() ? null : outcome.firstName());
+                    insert.setString(2, outcome.lastName().isEmpty() ? null : outcome.lastName());
+                    insert.setString(3, outcome.username());
+                    insert.setString(4, hash);
+                    insert.executeUpdate();
+                }
+                DatabaseManager.logSecurityEvent(
+                        connection,
+                        outcome.username(),
+                        "BOOTSTRAP_ADMIN_CREATED",
+                        "First administrator account created at initial setup."
+                );
+                JOptionPane.showMessageDialog(
+                        null,
+                        "Your administrator account is ready.\n\nSign in with username: " + outcome.username()
+                );
+                return;
+            } catch (SQLException ex) {
+                String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
+                if (msg.contains("unique")) {
+                    JOptionPane.showMessageDialog(
+                            null,
+                            "That username is already taken. Try a slightly different name and try again."
+                    );
+                } else {
+                    throw ex;
+                }
+            } finally {
+                Arrays.fill(password, '\0');
+            }
+        }
+    }
+
+    /**
      * Modal login loop: validates credentials, enforces first-login password reset, opens {@link postLogin#mainMenu},
      * and re-runs itself when the workspace closes so operators can log in again or switch users.
      */
     static void runSessionCycle() {
         try (Connection connection = DatabaseManager.getConnection()) {
+            ensureInitialAdministratorOrExit(connection);
+
             boolean loginLoop = true;
             int attempts = 4;
 
@@ -161,7 +211,7 @@ public class Login {
         }
     }
 
-    /** Returns true when locked_until is set to a future timestamp. */
+    /** Returns {@code true} when {@code locked_until} parses to an instant strictly after {@link Instant#now()}. */
     private static boolean isAccountLocked(String lockedUntilRaw) {
         if (lockedUntilRaw == null || lockedUntilRaw.isBlank()) {
             return false;
@@ -174,7 +224,14 @@ public class Login {
         }
     }
 
-    /** Increments failed attempts and applies lockout window when threshold is reached. */
+    /**
+     * Increments failed login attempts after a rejected password check; resets counter while applying a timed lock window.
+     *
+     * @param connection      JDBC session
+     * @param username        account being penalized
+     * @param failedAttempts  next counter value sourced from SELECT prior to mutation
+     * @throws SQLException   when persistence fails
+     */
     private static void registerFailedAttempt(Connection connection, String username, int failedAttempts) throws SQLException {
         boolean shouldLock = failedAttempts >= MAX_FAILED_ATTEMPTS;
         String lockUntil = shouldLock
@@ -190,7 +247,13 @@ public class Login {
         }
     }
 
-    /** Clears failed-attempt and lockout state after successful authentication. */
+    /**
+     * Clears failed-attempt and lock timers after credential success.
+     *
+     * @param connection JDBC session
+     * @param username   victorious account identifier
+     * @throws SQLException when persistence fails
+     */
     private static void resetFailedAttempts(Connection connection, String username) throws SQLException {
         String sql = "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE username = ?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -260,7 +323,7 @@ public class Login {
 
 
     /**
-     * Persists {@code users.last_login} using the same display format as {@link dateTime#formattedDateTime()}.
+     * Persists {@code users.last_login} using {@link dateTime#nowDisplayString()} for consistent audit formatting.
      *
      * @param connection enterprise JDBC connection
      * @param username   row to update
@@ -297,7 +360,11 @@ public class Login {
     }
 
 
-    /** Initializes database schema and migration checks at startup. */
+    /**
+     * Bootstraps {@link DatabaseManager#initializeEnterpriseDatabase()} during startup splash.
+     *
+     * @throws SQLException propagated when DDL/migrations refuse to complete
+     */
     private static void databaseCheck() throws SQLException {
         DatabaseManager.initializeEnterpriseDatabase();
     }

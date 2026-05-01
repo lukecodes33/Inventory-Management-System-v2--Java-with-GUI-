@@ -15,11 +15,19 @@ public final class SecurityUtils {
     private static final int SALT_BYTES = 16;
     private static final int KEY_LENGTH_BITS = 256;
 
-    /** Utility holder for password hashing and verification helpers. */
+    /**
+     * Prevents instantiation; use static helpers only.
+     */
     private SecurityUtils() {
     }
 
-    /** Hashes a password using PBKDF2-HMAC-SHA256 with random salt. */
+    /**
+     * Hashes a password using PBKDF2-HMAC-SHA256 with a random salt, returning a prefixed string digest.
+     *
+     * @param password candidate password chars (caller should wipe after use where appropriate)
+     * @return reversible encoding-safe string combining iteration count, salt, and hash fragments
+     * @throws IllegalStateException when JVM crypto providers cannot supply PBKDF2 SHA-256
+     */
     public static String hashPassword(char[] password) {
         byte[] salt = new byte[SALT_BYTES];
         new SecureRandom().nextBytes(salt);
@@ -31,7 +39,14 @@ public final class SecurityUtils {
                 + "$" + Base64.getEncoder().encodeToString(hash);
     }
 
-    /** Verifies candidate password against hashed or legacy plaintext value. */
+    /**
+     * Verifies a candidate password against a stored hashed value ({@link #hashPassword(char[])}) or,
+     * for migration, treats non-prefixed values as plaintext for constant-time equality.
+     *
+     * @param password    candidate chars from the login form
+     * @param storedValue database-stored credential string or hash
+     * @return {@code true} only when verification succeeds
+     */
     public static boolean verifyPassword(char[] password, String storedValue) {
         if (storedValue == null || storedValue.isBlank()) {
             return false;
@@ -54,12 +69,24 @@ public final class SecurityUtils {
         return constantTimeEquals(candidateHash, expectedHash);
     }
 
-    /** Returns true when stored password value is in legacy plaintext format. */
+    /**
+     * @param storedValue value read from persistence (may be null)
+     * @return {@code true} when stored value is not prefixed with PBKDF2 digest marker (legacy plaintext row)
+     */
     public static boolean isLegacyPlaintextPassword(String storedValue) {
         return storedValue != null && !storedValue.startsWith(HASH_PREFIX + "$");
     }
 
-    /** Derives a key using PBKDF2 for password hashing operations. */
+    /**
+     * Runs PBKDF2 key derivation suitable for comparing password hash bytes.
+     *
+     * @param password       secret characters
+     * @param salt           random salt bytes
+     * @param iterations     PBKDF2 iteration cost
+     * @param keyLengthBits  derived key length in bits
+     * @return derived key octets (length implied by algorithm output)
+     * @throws IllegalStateException when derivation fails catastrophically
+     */
     private static byte[] pbkdf2(char[] password, byte[] salt, int iterations, int keyLengthBits) {
         try {
             PBEKeySpec spec = new PBEKeySpec(password, salt, iterations, keyLengthBits);
@@ -70,7 +97,13 @@ public final class SecurityUtils {
         }
     }
 
-    /** Constant-time byte array comparison to reduce timing side channels. */
+    /**
+     * Constant-time byte array comparison intended to hinder timing probes on hashed bytes.
+     *
+     * @param a first operand (may not be null for match)
+     * @param b second operand
+     * @return {@code true} when arrays are same length and hold identical octets
+     */
     private static boolean constantTimeEquals(byte[] a, byte[] b) {
         if (a == null || b == null || a.length != b.length) {
             return false;
@@ -82,7 +115,13 @@ public final class SecurityUtils {
         return result == 0;
     }
 
-    /** Constant-time string comparison for legacy plaintext verification path. */
+    /**
+     * Constant-time string comparison used only along the deprecated plaintext compat path.
+     *
+     * @param a comparable string segment
+     * @param b other segment (must equal length for match per side-channel-harder rule)
+     * @return equality result without early exit on mismatched prefixes
+     */
     private static boolean constantTimeEquals(String a, String b) {
         if (a == null || b == null || a.length() != b.length()) {
             return false;

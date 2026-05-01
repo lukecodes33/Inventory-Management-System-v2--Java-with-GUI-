@@ -21,8 +21,9 @@ import java.awt.event.WindowEvent;
 public class LoginPopUp {
 
     /**
-     * Shows a modal login dialog and returns submitted credentials.
-     * If the user closes the window without signing in, username is {@code null}.
+     * Launches modal login UI and returns immutable credentials assembled on the EDT.
+     *
+     * @return credential snapshot; cleared password array when canceled/closed ({@code username} {@code null} signals exit)
      */
     public LoginCredentials createLoginPopUp() {
         JDialog dialog = new JDialog((java.awt.Frame) null, "Inventory Management System", true);

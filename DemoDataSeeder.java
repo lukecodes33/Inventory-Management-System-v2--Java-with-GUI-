@@ -77,6 +77,8 @@ public final class DemoDataSeeder {
             seedMiscMovements(connection, rnd, horizon);
             seedPendingOrders(connection, rnd, horizon);
 
+            DatabaseManager.reconcileStorageBucketsFromInventoryForSkuPrefix(connection, ITEM_PREFIX + "%");
+
             connection.commit();
         }
         printCounts();
@@ -193,7 +195,7 @@ public final class DemoDataSeeder {
                 salePs.setDouble(4, totalSale);
                 salePs.setDouble(5, totalCost);
                 salePs.setString(6, reference);
-                salePs.setString(7, "Admin");
+                salePs.setString(7, "Demo");
                 salePs.setString(8, disp);
                 salePs.setString(9, iso);
                 salePs.setNull(10, java.sql.Types.VARCHAR);
@@ -203,7 +205,7 @@ public final class DemoDataSeeder {
                 movPs.setInt(2, amt);
                 movPs.setString(3, "SALE");
                 movPs.setString(4, "CUSTOMER_SALE");
-                movPs.setString(5, "Admin");
+                movPs.setString(5, "Demo");
                 movPs.setString(6, disp);
                 movPs.executeUpdate();
             }
@@ -225,7 +227,7 @@ public final class DemoDataSeeder {
                 ps.setInt(2, amt);
                 ps.setString(3, type);
                 ps.setString(4, reason);
-                ps.setString(5, "Admin");
+                ps.setString(5, "Demo");
                 ps.setString(6, disp);
                 ps.executeUpdate();
             }
@@ -234,8 +236,8 @@ public final class DemoDataSeeder {
 
     /** Inserts {@link #PENDING_ORDER_ROWS} open purchase lines referencing demo SKUs. */
     private static void seedPendingOrders(Connection connection, ThreadLocalRandom rnd, LocalDateTime horizon) throws SQLException {
-        String sql = "INSERT INTO pendingOrders (\"Item Code\", \"Amount\", \"Purchase Price\", \"Reference\", \"User\", \"Date\") "
-                + "VALUES (?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO pendingOrders (\"Item Code\", \"Amount\", \"Purchase Price\", \"Purchased From\", \"Reference\", \"User\", \"Date\") "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (int n = 0; n < PENDING_ORDER_ROWS; n++) {
                 String code = itemCode(rnd.nextInt(ITEM_COUNT));
@@ -245,9 +247,10 @@ public final class DemoDataSeeder {
                 ps.setString(1, code);
                 ps.setInt(2, amt);
                 ps.setDouble(3, price);
-                ps.setString(4, "P-DMO-" + String.format("%04d", n));
-                ps.setString(5, "Admin");
-                ps.setString(6, formatDisplay(when));
+                ps.setString(4, "Demo Wholesale");
+                ps.setString(5, "P-DMO-" + String.format("%04d", n));
+                ps.setString(6, "Demo");
+                ps.setString(7, formatDisplay(when));
                 ps.executeUpdate();
             }
         }

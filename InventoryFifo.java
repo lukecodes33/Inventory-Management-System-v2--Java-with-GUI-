@@ -44,7 +44,11 @@ public final class InventoryFifo {
         double totalCost = 0;
         int consumed = 0;
 
-        try (PreparedStatement layerStatement = connection.prepareStatement(selectLayers)) {
+        try (
+                PreparedStatement layerStatement = connection.prepareStatement(selectLayers);
+                PreparedStatement updateLayer = connection.prepareStatement(
+                        "UPDATE inventory_cost_layers SET qty_remaining = qty_remaining - ? WHERE id = ?")
+        ) {
             layerStatement.setString(1, itemCode);
             try (ResultSet rs = layerStatement.executeQuery()) {
                 while (rs.next() && remaining > 0) {
@@ -53,13 +57,9 @@ public final class InventoryFifo {
                     double unitCost = rs.getDouble("unit_cost");
                     int take = Math.min(layerQtyRemaining, remaining);
 
-                    try (PreparedStatement updateLayer = connection.prepareStatement(
-                            "UPDATE inventory_cost_layers SET qty_remaining = qty_remaining - ? WHERE id = ?"
-                    )) {
-                        updateLayer.setInt(1, take);
-                        updateLayer.setInt(2, layerId);
-                        updateLayer.executeUpdate();
-                    }
+                    updateLayer.setInt(1, take);
+                    updateLayer.setInt(2, layerId);
+                    updateLayer.executeUpdate();
 
                     consumed += take;
                     remaining -= take;
@@ -77,7 +77,10 @@ public final class InventoryFifo {
     /**
      * Most recently recorded receipt unit cost for an item (any cost layer, newest first).
      *
+     * @param connection open JDBC session
+     * @param itemCode   inventory SKU key
      * @return unit cost, or {@link Double#NaN} when no layers exist for the item
+     * @throws SQLException when the query fails
      */
     public static double latestRecordedUnitCost(Connection connection, String itemCode) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -120,6 +123,10 @@ public final class InventoryFifo {
      * On-hand valuation: current {@code Stock} × {@code Inventory.Market Price} per SKU.
      * Items with NULL market price contribute {@code 0}; compare to FIFO carrying value via
      * {@link #totalFifoStockValue(Connection)}.
+     *
+     * @param connection open JDBC session
+     * @return summed {@code Stock × Market Price} across inventory using SQL coalesce semantics
+     * @throws SQLException when the aggregate query fails
      */
     public static double totalMarketValueOfOnHandStock(Connection connection) throws SQLException {
         String sql =
@@ -134,6 +141,8 @@ public final class InventoryFifo {
      * Sum of unit_cost × qty_remaining for all open FIFO layers (on-hand inventory value).
      *
      * @param connection open JDBC connection
+     * @return summed layer value where {@code qty_remaining &gt; 0}
+     * @throws SQLException when the aggregate query fails
      */
     public static double totalFifoStockValue(Connection connection) throws SQLException {
         String sql = "SELECT COALESCE(SUM(unit_cost * qty_remaining), 0) AS v FROM inventory_cost_layers WHERE qty_remaining > 0";
@@ -147,6 +156,8 @@ public final class InventoryFifo {
      * Lifetime realized P/L: sum of (sale revenue − FIFO cost) across all sales rows.
      *
      * @param connection open JDBC connection
+     * @return aggregate {@code SUM(Total Price - Total Cost)}
+     * @throws SQLException when the aggregate query fails
      */
     public static double lifetimeProfitLoss(Connection connection) throws SQLException {
         String sql = "SELECT COALESCE(SUM(`Total Price` - COALESCE(`Total Cost`, 0)), 0) AS p FROM sales";
@@ -160,6 +171,8 @@ public final class InventoryFifo {
      * Sum of all recorded sale revenue (for gross margin denominator).
      *
      * @param connection open JDBC connection
+     * @return summed {@code Total Price}; zero when empty
+     * @throws SQLException when the aggregate query fails
      */
     public static double lifetimeTotalRevenue(Connection connection) throws SQLException {
         String sql = "SELECT COALESCE(SUM(`Total Price`), 0) AS r FROM sales";
@@ -176,6 +189,8 @@ public final class InventoryFifo {
      * @param connection open JDBC connection
      * @param start      first calendar day (inclusive)
      * @param end        last calendar day (inclusive)
+     * @return period P/L for rows with qualifying {@code DateISO}
+     * @throws SQLException when the bounded query fails
      */
     public static double profitLossBetweenDates(Connection connection, LocalDate start, LocalDate end) throws SQLException {
         String from = start.toString() + " 00:00:00";
@@ -195,6 +210,8 @@ public final class InventoryFifo {
      * Open purchase-order line exposure: sum of (quantity × unit purchase price).
      *
      * @param connection open JDBC connection
+     * @return total open PO monetary exposure
+     * @throws SQLException when the aggregate query fails
      */
     public static double openPurchaseOrderExposure(Connection connection) throws SQLException {
         String sql = "SELECT COALESCE(SUM(CAST(`Amount` AS REAL) * `Purchase Price`), 0) AS v FROM pendingOrders";
@@ -212,6 +229,8 @@ public final class InventoryFifo {
      * @param start      range start (inclusive calendar day)
      * @param end        range end (inclusive calendar day)
      * @param limit      maximum rows (clamped 1–50)
+     * @return ordered list ranked by summed units descending
+     * @throws SQLException when the bounded query fails
      */
     public static List<TopMoverRow> topMoversByUnitsBetweenDates(
             Connection connection,
@@ -246,22 +265,42 @@ public final class InventoryFifo {
         }
     }
 
-    /** @param date anchor day in the month */
+    /**
+     * First calendar day of the month containing {@code date}.
+     *
+     * @param date anchor day in the target month
+     * @return first day-of-month boundary
+     */
     public static LocalDate firstDayOfMonth(LocalDate date) {
         return date.with(TemporalAdjusters.firstDayOfMonth());
     }
 
-    /** @param date anchor day in the month */
+    /**
+     * Last calendar day of the month containing {@code date}.
+     *
+     * @param date anchor day in the target month
+     * @return last day-of-month boundary
+     */
     public static LocalDate lastDayOfMonth(LocalDate date) {
         return date.with(TemporalAdjusters.lastDayOfMonth());
     }
 
-    /** @param date any day in the target ISO week */
+    /**
+     * Monday of the ISO week containing {@code date}.
+     *
+     * @param date any day within the ISO week
+     * @return that week's Monday (local timeline)
+     */
     public static LocalDate startOfIsoWeek(LocalDate date) {
         return date.with(java.time.DayOfWeek.MONDAY);
     }
 
-    /** @param date any day in the target ISO week */
+    /**
+     * Sunday of the ISO week containing {@code date} ({@link #startOfIsoWeek(LocalDate)} + 6 days).
+     *
+     * @param date any day within the ISO week
+     * @return that week's Sunday
+     */
     public static LocalDate endOfIsoWeek(LocalDate date) {
         return startOfIsoWeek(date).plusDays(6);
     }

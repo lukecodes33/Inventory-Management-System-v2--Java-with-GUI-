@@ -4,9 +4,7 @@ small scale businesses to use to keep track of inventory, orders and allow speci
 users.
 
 I have previously created a command line version of this in python however i have decided due to wanting a nicer GUI
-and an upgrade to speed, i am re creating it in java. If you are downloading this your initial login will be
-
-User: Admin
-password: firstLogin
-
-all password resets and database creating will be done on first login.
+and an upgrade to speed, i am re creating it in java. If you are downloading this, the first time you run the application and the database has no user accounts yet,
+you will be asked for your name and a strong password. That creates the first administrator account (you will
+see the generated sign-in username during setup). Additional users and password changes are managed from the
+application after you sign in.

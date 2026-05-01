@@ -11,7 +11,10 @@ public final class dateTime {
 
     /**
      * Legacy no-arg constructor; prefer {@link #nowDisplayString()} to avoid extra allocation.
+     *
+     * @deprecated prefer {@link #nowDisplayString()}; retained for older {@link #formattedDateTime()} chaining
      */
+    @Deprecated(forRemoval = false)
     public dateTime() {
     }
 
@@ -25,10 +28,12 @@ public final class dateTime {
     }
 
     /**
-     * Same output as {@link #nowDisplayString()}; retained for callers that still use {@code new dateTime()}.
+     * Same output as {@link #nowDisplayString()}; retained only for callers that still use {@code new dateTime()}.
      *
      * @return formatted {@code dd-MM-yyyy HH:mm:ss} string
+     * @deprecated prefer {@link #nowDisplayString()} for static callers
      */
+    @Deprecated(forRemoval = false)
     public String formattedDateTime() {
         return nowDisplayString();
     }

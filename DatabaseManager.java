@@ -16,6 +16,14 @@ import java.sql.Types;
  * SQLite enterprise database path, connection factory, schema creation, legacy migration, and security audit logging.
  */
 public final class DatabaseManager {
+    /** Sentinel row for stock not tied to a user-named bin ({@link #initializeEnterpriseDatabase} guarantees it exists when storage tables exist). */
+    public static final int STORAGE_LOCATION_UNASSIGNED_ID = 1;
+
+    /** {@code true} when per-location qty table exists (enterprise schema initialized). */
+    public static boolean hasInventoryStorageQtyTable(Connection connection) throws SQLException {
+        return tableExists(connection, "inventory_storage_qty");
+    }
+
     private static final Path DATABASE_DIR = Paths.get("database");
     private static final String ENTERPRISE_DB_FILE = "ims_enterprise.sqlite";
     private static volatile boolean driverLoaded = false;
@@ -68,7 +76,8 @@ public final class DatabaseManager {
     }
 
     /**
-     * Creates and upgrades schema, indexes, migration state, and default admin.
+     * Creates and upgrades schema, indexes, migration state. User accounts are created at first launch
+     * (see {@link Login}) when the {@code users} table is empty.
      *
      * @throws SQLException when initialization fails
      */
@@ -84,7 +93,7 @@ public final class DatabaseManager {
             ensureSchemaEvolution(connection);
             createEnterpriseIndexes(connection);
             migrateLegacyDatabasesIfNeeded(connection);
-            seedDefaultAdminIfNeeded(connection);
+            syncInventoryStorageBucketsForSkusMissingRows(connection);
         }
     }
 
@@ -151,6 +160,7 @@ public final class DatabaseManager {
                     "Item Code" TEXT NOT NULL,
                     "Amount" INTEGER NOT NULL,
                     "Purchase Price" REAL NOT NULL DEFAULT 0,
+                    "Purchased From" TEXT NOT NULL DEFAULT '',
                     "Reference" TEXT NOT NULL,
                     "User" TEXT NOT NULL,
                     "Date" TEXT NOT NULL
@@ -264,6 +274,11 @@ public final class DatabaseManager {
                 statement.execute("ALTER TABLE pendingOrders ADD COLUMN \"Purchase Price\" REAL NOT NULL DEFAULT 0");
             }
         }
+        if (!columnExists(connection, "pendingOrders", "Purchased From")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE pendingOrders ADD COLUMN \"Purchased From\" TEXT NOT NULL DEFAULT ''");
+            }
+        }
         if (!columnExists(connection, "movements", "Reason")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("ALTER TABLE movements ADD COLUMN \"Reason\" TEXT");
@@ -340,6 +355,138 @@ public final class DatabaseManager {
                         )
                         """);
             }
+        }
+        ensureStorageLocationsAndBuckets(connection);
+    }
+
+    /**
+     * Creates {@code storage_locations} / {@code inventory_storage_qty} when absent, seeds the reserved
+     * {@value #STORAGE_LOCATION_UNASSIGNED_ID} bucket, indexes, and syncs SKU rows missing any bin placement.
+     */
+    private static void ensureStorageLocationsAndBuckets(Connection connection) throws SQLException {
+        if (!tableExists(connection, "storage_locations")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("""
+                            CREATE TABLE storage_locations (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                                    sort_order INTEGER NOT NULL DEFAULT 0,
+                                    active INTEGER NOT NULL DEFAULT 1,
+                                    system_reserved INTEGER NOT NULL DEFAULT 0
+                                )
+                            """);
+                statement.execute("""
+                            CREATE TABLE inventory_storage_qty (
+                                    item_code TEXT NOT NULL,
+                                    location_id INTEGER NOT NULL,
+                                    qty INTEGER NOT NULL CHECK (qty > 0),
+                                    PRIMARY KEY (item_code, location_id),
+                                    FOREIGN KEY (item_code) REFERENCES Inventory("Item Code") ON DELETE CASCADE,
+                                    FOREIGN KEY (location_id) REFERENCES storage_locations(id) ON DELETE RESTRICT
+                                )
+                            """);
+                statement.execute("CREATE INDEX IF NOT EXISTS idx_inventory_storage_qty_item ON inventory_storage_qty(item_code)");
+                statement.execute("CREATE INDEX IF NOT EXISTS idx_inventory_storage_qty_location ON inventory_storage_qty(location_id)");
+            }
+            try (PreparedStatement seed = connection.prepareStatement(
+                    """
+                            INSERT INTO storage_locations (id, name, sort_order, active, system_reserved)
+                            VALUES (?,?,?,?,?)
+                            """
+            )) {
+                seed.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
+                seed.setString(2, "Unassigned");
+                seed.setInt(3, -1_000_000);
+                seed.setInt(4, 1);
+                seed.setInt(5, 1);
+                seed.executeUpdate();
+            }
+            syncInventoryStorageBucketsForSkusMissingRows(connection);
+            return;
+        }
+        ensureReservedUnassignedLocationRow(connection);
+        syncInventoryStorageBucketsForSkusMissingRows(connection);
+    }
+
+    /**
+     * Ensures each SKU with on-hand inventory has at least one storage row ({@link #STORAGE_LOCATION_UNASSIGNED_ID}).
+     * Skips SKUs already represented in {@code inventory_storage_qty} so multi-bin balances stay authoritative.
+     */
+    public static void syncInventoryStorageBucketsForSkusMissingRows(Connection connection) throws SQLException {
+        if (!tableExists(connection, "inventory_storage_qty")) {
+            return;
+        }
+        ensureReservedUnassignedLocationRow(connection);
+        try (PreparedStatement statement = connection.prepareStatement("""
+                            INSERT INTO inventory_storage_qty (item_code, location_id, qty)
+                            SELECT i.`Item Code`, ?, i.Stock FROM Inventory i
+                            WHERE i.Stock > 0
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM inventory_storage_qty s WHERE s.item_code = i.`Item Code`
+                              )
+                    """)) {
+            statement.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void ensureReservedUnassignedLocationRow(Connection connection) throws SQLException {
+        if (!tableExists(connection, "storage_locations")) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                """
+                        INSERT OR IGNORE INTO storage_locations (id, name, sort_order, active, system_reserved)
+                        VALUES (?,?,?,?,?)
+                        """)) {
+            statement.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
+            statement.setString(2, "Unassigned");
+            statement.setInt(3, -1_000_000);
+            statement.setInt(4, 1);
+            statement.setInt(5, 1);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
+     * Seeds on-hand qty into bucket one only when nothing is tracked yet per SKU ({@code DMO%} / stress prefixes).
+     */
+    public static void seedUnassignedBucketsForItemsLike(Connection connection, String likePattern) throws SQLException {
+        if (!tableExists(connection, "inventory_storage_qty") || likePattern == null || likePattern.isBlank()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO inventory_storage_qty (item_code, location_id, qty)
+                        SELECT i.`Item Code`, ?, i.Stock FROM Inventory i
+                        WHERE i.Stock > 0 AND i.`Item Code` LIKE ?
+                          AND NOT EXISTS (SELECT 1 FROM inventory_storage_qty s WHERE s.item_code = i.`Item Code`)
+                """)) {
+            statement.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
+            statement.setString(2, likePattern);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
+     * Seeds / demo helper: resets per-location rows for SKUs matching the prefix so totals match {@code Inventory.Stock}.
+     */
+    public static void reconcileStorageBucketsFromInventoryForSkuPrefix(Connection connection, String likePattern) throws SQLException {
+        if (!tableExists(connection, "inventory_storage_qty") || likePattern == null || likePattern.isBlank()) {
+            return;
+        }
+        ensureReservedUnassignedLocationRow(connection);
+        try (PreparedStatement delete = connection.prepareStatement("DELETE FROM inventory_storage_qty WHERE item_code LIKE ?")) {
+            delete.setString(1, likePattern);
+            delete.executeUpdate();
+        }
+        try (PreparedStatement insert = connection.prepareStatement("""
+                        INSERT INTO inventory_storage_qty (item_code, location_id, qty)
+                        SELECT i.`Item Code`, ?, i.Stock FROM Inventory i
+                        WHERE i.Stock > 0 AND i.`Item Code` LIKE ?
+                """)) {
+            insert.setInt(1, STORAGE_LOCATION_UNASSIGNED_ID);
+            insert.setString(2, likePattern);
+            insert.executeUpdate();
         }
     }
 
@@ -571,6 +718,20 @@ public final class DatabaseManager {
     }
 
     /**
+     * Returns the number of rows in {@code users}.
+     *
+     * @param connection open JDBC connection
+     * @return user count
+     * @throws SQLException when the query fails
+     */
+    public static int countUsers(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT COUNT(*) AS c FROM users")) {
+            return rs.next() ? rs.getInt("c") : 0;
+        }
+    }
+
+    /**
      * Writes a security-relevant event to the audit log.
      *
      * @param connection active database connection
@@ -591,9 +752,9 @@ public final class DatabaseManager {
     }
 
     /**
-     * Destructive factory reset: clears transactional tables, keeps only the {@code Admin} user with password
-     * {@code firstLogin} and {@code first_login=1}, removes every other login, and deletes regular files under
+     * Destructive factory reset: clears transactional tables, removes all user accounts, and deletes regular files under
      * {@code item_images/} (does not remove {@code company.txt} or {@code workspace_welcome.png} in the project root).
+     * The next application launch prompts to create the first administrator again when no users remain.
      *
      * @param connection open JDBC connection; auto-commit is restored after this method returns
      * @throws SQLException when a statement fails
@@ -609,32 +770,12 @@ public final class DatabaseManager {
                 statement.executeUpdate("DELETE FROM pendingOrders");
                 statement.executeUpdate("DELETE FROM movements");
                 statement.executeUpdate("DELETE FROM Inventory");
+                if (tableExists(connection, "storage_locations")) {
+                    statement.executeUpdate("DELETE FROM storage_locations WHERE id <> " + STORAGE_LOCATION_UNASSIGNED_ID);
+                }
                 statement.executeUpdate("DELETE FROM Logins");
                 statement.executeUpdate("DELETE FROM security_audit");
-                statement.executeUpdate("DELETE FROM users WHERE LOWER(TRIM(username)) <> 'admin'");
-            }
-            String adminHash = SecurityUtils.hashPassword("firstLogin".toCharArray());
-            try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE users SET first_name = ?, last_name = ?, password = ?, admin_rights = 1, "
-                            + "last_login = NULL, first_login = 1, failed_attempts = 0, locked_until = NULL "
-                            + "WHERE LOWER(TRIM(username)) = 'admin'"
-            )) {
-                update.setString(1, "System");
-                update.setString(2, "Administrator");
-                update.setString(3, adminHash);
-                int updated = update.executeUpdate();
-                if (updated == 0) {
-                    try (PreparedStatement insert = connection.prepareStatement(
-                            "INSERT INTO users (first_name, last_name, username, password, admin_rights, first_login, "
-                                    + "failed_attempts, locked_until, last_login) VALUES (?, ?, ?, ?, 1, 1, 0, NULL, NULL)"
-                    )) {
-                        insert.setString(1, "System");
-                        insert.setString(2, "Administrator");
-                        insert.setString(3, "Admin");
-                        insert.setString(4, adminHash);
-                        insert.executeUpdate();
-                    }
-                }
+                statement.executeUpdate("DELETE FROM users");
             }
             try (Statement statement = connection.createStatement()) {
                 statement.executeUpdate("DELETE FROM sqlite_sequence WHERE name IN ('inventory_cost_layers', 'security_audit')");
@@ -663,28 +804,6 @@ public final class DatabaseManager {
                     Files.deleteIfExists(entry);
                 }
             }
-        }
-    }
-
-    /** Seeds the default administrator account on an empty users table. */
-    private static void seedDefaultAdminIfNeeded(Connection connection) throws SQLException {
-        String checkSql = "SELECT COUNT(*) AS count FROM users";
-        try (Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery(checkSql)) {
-            if (resultSet.next() && resultSet.getInt("count") > 0) {
-                return;
-            }
-        }
-
-        String insertSql = "INSERT INTO users (first_name, last_name, username, password, admin_rights, first_login) VALUES (?, ?, ?, ?, ?, ?)";
-        try (PreparedStatement statement = connection.prepareStatement(insertSql)) {
-            statement.setString(1, "System");
-            statement.setString(2, "Administrator");
-            statement.setString(3, "Admin");
-            statement.setString(4, SecurityUtils.hashPassword("firstLogin".toCharArray()));
-            statement.setInt(5, 1);
-            statement.setInt(6, 1);
-            statement.executeUpdate();
         }
     }
 }
