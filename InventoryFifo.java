@@ -413,4 +413,62 @@ public final class InventoryFifo {
             this.gainPercent = gainPercent;
         }
     }
+
+    /**
+     * Unrealized margin percent for on-hand SKUs ({@code (market − FIFO avg) / FIFO avg × 100}), or {@code null}.
+     */
+    public static Double unrealizedMarginPercent(Connection connection, String itemCode) throws SQLException {
+        if (itemCode == null || itemCode.isBlank()) {
+            return null;
+        }
+        Double avg = weightedAverageFifoUnitCost(connection, itemCode);
+        if (avg == null || avg <= 1e-12) {
+            return null;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT `Market Price` FROM inventory WHERE `Item Code` = ? AND `Stock` > 0 LIMIT 1")) {
+            ps.setString(1, itemCode.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next() || rs.wasNull()) {
+                    return null;
+                }
+                double market = rs.getDouble(1);
+                return ((market - avg) / avg) * 100.0;
+            }
+        }
+    }
+
+    /** Share of total on-hand units assigned to named storage bins (excludes unassigned bucket). */
+    public static double binUtilizationPercent(Connection connection) throws SQLException {
+        if (!DatabaseManager.hasInventoryStorageQtyTable(connection)) {
+            return 0;
+        }
+        int totalStock = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(SUM(`Stock`), 0) FROM inventory")) {
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    totalStock = rs.getInt(1);
+                }
+            }
+        }
+        if (totalStock <= 0) {
+            return 0;
+        }
+        int binned = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                """
+                SELECT COALESCE(SUM(q.qty), 0)
+                FROM inventory_storage_qty q
+                WHERE q.location_id != ?
+                """)) {
+            ps.setInt(1, DatabaseManager.STORAGE_LOCATION_UNASSIGNED_ID);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    binned = rs.getInt(1);
+                }
+            }
+        }
+        return Math.min(100.0, (binned * 100.0) / totalStock);
+    }
 }

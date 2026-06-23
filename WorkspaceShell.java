@@ -68,6 +68,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -151,11 +153,11 @@ public final class WorkspaceShell {
 
     /** {@link JPanel#getClientProperty(Object)} key for sidebar nav selection sync. */
     private static final String CLIENT_NAV_SIDEBAR_SELECTOR = "ims.NavSidebarSelector";
-    /** View Items: open with low-stock filter pre-enabled. */
-    private static final String CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY = "ims.viewItemsLowStockOnly";
     /** View Items: pre-fill search field text. */
     private static final String CLIENT_VIEW_ITEMS_SEARCH_TEXT = "ims.viewItemsSearchText";
+    private static final String CLIENT_RECENT_REFRESHER = "ims.recentRefresher";
     private static final int DEFAULT_BACKUP_REMINDER_DAYS = 7;
+    private static final int DEFAULT_STALE_MARKET_PRICE_DAYS = 90;
 
     /** CardLayout orphans prior components if the same sidebar key builds a new panel; we remove the old instance before re-adding. */
     private static final String CLIENT_WORKSPACE_CARD_REGISTRY = "ims.workspaceCardRegistry";
@@ -234,7 +236,7 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Top session strip labeled with signed-in username and optional low-stock / backup status.
+     * Top session strip labeled with signed-in username and optional backup status.
      *
      * @param user session identity
      * @return bordered north strip component ready for frame attachment
@@ -261,21 +263,6 @@ public final class WorkspaceShell {
         JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 14, 0));
         AppUI.applyPanelBackground(east);
         east.setOpaque(false);
-        try {
-            int lowCount = countLowStockSkus(connection);
-            if (lowCount > 0) {
-                JButton lowLink = new JButton(lowCount == 1 ? "1 low-stock item" : lowCount + " low-stock items");
-                lowLink.setBorderPainted(false);
-                lowLink.setContentAreaFilled(false);
-                lowLink.setFocusPainted(false);
-                lowLink.setForeground(AppUI.DANGER);
-                lowLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                lowLink.addActionListener(e -> openViewItemsWithFilters(workspaceContainer, frame, user, connection, "", true));
-                east.add(lowLink);
-            }
-        } catch (SQLException ignored) {
-            // Omit status chip when the count cannot be loaded.
-        }
         if (user.hasAdminRights()) {
             try {
                 int reminderDays = readBackupReminderDays(connection);
@@ -315,6 +302,13 @@ public final class WorkspaceShell {
     private static volatile Consumer<Connection> profitAlertBannerRefreshAction;
     /** Sidebar card key for the view currently shown in the workspace (persisted on close). */
     private static volatile String activeWorkspaceViewKey = "home";
+    private static volatile String pendingReportPreselectType;
+    private static final int RECENT_ITEMS_MAX = 10;
+    private static final Deque<RecentItemEntry> recentItems = new ArrayDeque<>();
+    private static final List<Runnable> recentItemRefreshers = new ArrayList<>();
+
+    private record RecentItemEntry(String itemCode, String label) {
+    }
 
     /**
      * Refreshes the scrolling profit-alert banner after settings change (invokes on the EDT).
@@ -342,62 +336,66 @@ public final class WorkspaceShell {
         }
     }
 
+    private static boolean readBackupOnLogoutEnabled(Connection connection) throws SQLException {
+        String raw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_BACKUP_ON_LOGOUT_ENABLED);
+        if (raw == null || raw.isBlank()) {
+            return false;
+        }
+        return "1".equals(raw.trim()) || "true".equalsIgnoreCase(raw.trim());
+    }
+
+    private static int readStaleMarketPriceDays(Connection connection) throws SQLException {
+        String raw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_STALE_MARKET_PRICE_DAYS);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_STALE_MARKET_PRICE_DAYS;
+        }
+        try {
+            int v = Integer.parseInt(raw.trim());
+            return v < 1 ? DEFAULT_STALE_MARKET_PRICE_DAYS : Math.min(v, 3650);
+        } catch (NumberFormatException ex) {
+            return DEFAULT_STALE_MARKET_PRICE_DAYS;
+        }
+    }
+
+    private static synchronized List<RecentItemEntry> snapshotRecentItems() {
+        return new ArrayList<>(recentItems);
+    }
+
+    private static synchronized void registerRecentItemRefresher(Runnable refresher) {
+        if (refresher == null) {
+            return;
+        }
+        recentItemRefreshers.add(refresher);
+    }
+
+    private static synchronized void unregisterRecentItemRefresher(Runnable refresher) {
+        recentItemRefreshers.remove(refresher);
+    }
+
+    private static void recordRecentItem(String itemCode, String label) {
+        String code = itemCode == null ? "" : itemCode.trim();
+        if (code.isEmpty()) {
+            return;
+        }
+        String cleanedLabel = label == null ? "" : label.trim();
+        synchronized (WorkspaceShell.class) {
+            recentItems.removeIf(e -> code.equalsIgnoreCase(e.itemCode()));
+            recentItems.addFirst(new RecentItemEntry(code, cleanedLabel));
+            while (recentItems.size() > RECENT_ITEMS_MAX) {
+                recentItems.removeLast();
+            }
+        }
+        List<Runnable> refreshers;
+        synchronized (WorkspaceShell.class) {
+            refreshers = new ArrayList<>(recentItemRefreshers);
+        }
+        for (Runnable refresher : refreshers) {
+            SwingUtilities.invokeLater(refresher);
+        }
+    }
+
     private static boolean isLowStockSku(int stock, int reorderTrigger) {
         return reorderTrigger > 0 && reorderTrigger >= stock;
-    }
-
-    private static int countLowStockSkus(Connection connection) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT COUNT(*) FROM inventory WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`"
-        )) {
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getInt(1) : 0;
-            }
-        }
-    }
-
-    private static List<String> lowStockItemLabels(Connection connection) throws SQLException {
-        List<String> labels = new ArrayList<>();
-        try (PreparedStatement ps = connection.prepareStatement(
-                """
-                SELECT `Item Code`, `Item Name`, `Stock`, `ReOrder Trigger`
-                FROM inventory
-                WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`
-                ORDER BY `Item Code` COLLATE NOCASE ASC
-                """
-        )) {
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String code = rs.getString("Item Code");
-                    String nm = Objects.toString(rs.getString("Item Name"), "").trim();
-                    int stock = rs.getInt("Stock");
-                    int trigger = rs.getInt("ReOrder Trigger");
-                    String shortNm = nm.length() > 24 ? nm.substring(0, 23) + "…" : nm;
-                    String label = shortNm.isEmpty() ? code : code + " (" + shortNm + ")";
-                    labels.add(label + " — stock " + stock + " / trigger " + trigger);
-                }
-            }
-        }
-        return labels;
-    }
-
-    private static void openViewItemsWithFilters(
-            JPanel workspaceContainer,
-            JFrame frame,
-            User user,
-            Connection connection,
-            String searchText,
-            boolean lowStockOnly
-    ) {
-        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, searchText == null ? "" : searchText);
-        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY, lowStockOnly);
-        try {
-            showView(workspaceContainer, "View Items",
-                    buildInventoryTablePanel(user, connection, frame, workspaceContainer));
-        } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(frame, "Unable to open View Items: " + ex.getMessage(), "View Error",
-                    JOptionPane.ERROR_MESSAGE);
-        }
     }
 
     private static int parseMetadataInt(String raw, int fallback) {
@@ -577,6 +575,40 @@ public final class WorkspaceShell {
             JOptionPane.showMessageDialog(frame, msg, "Backup reminder", JOptionPane.WARNING_MESSAGE);
         } catch (SQLException | IOException ex) {
             // Skip dialog when reminder status cannot be determined.
+        }
+    }
+
+    private static void maybePromptBackupOnLogout(
+            User user,
+            Connection connection,
+            JFrame frame,
+            AccountActions accountActions
+    ) {
+        if (user == null || !user.hasAdminRights()) {
+            return;
+        }
+        try {
+            if (!readBackupOnLogoutEnabled(connection)) {
+                return;
+            }
+            int reminderDays = readBackupReminderDays(connection);
+            int since = accountActions.daysSinceLatestBackup();
+            if (since < 0 || since > reminderDays) {
+                String msg = since < 0
+                        ? "No backups were found. Run a backup before logging out?"
+                        : "Latest backup is " + since + " days old (threshold " + reminderDays + ").\nRun a backup before logging out?";
+                int result = JOptionPane.showConfirmDialog(
+                        frame,
+                        msg,
+                        "Backup before logout",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.WARNING_MESSAGE);
+                if (result == JOptionPane.YES_OPTION) {
+                    accountActions.backUpDatabase(user, frame);
+                }
+            }
+        } catch (SQLException | IOException ex) {
+            // Skip the prompt when metadata or backup status cannot be read.
         }
     }
 
@@ -1130,6 +1162,7 @@ public final class WorkspaceShell {
             metricsRailHost.add(photoRailCard, "photo");
             adminMetricsRailHost = new AdminMetricsRailHost(
                     connection,
+                    user.getUsername(),
                     metricsRailHost,
                     photoRailTitle,
                     photoRailImage,
@@ -1178,11 +1211,25 @@ public final class WorkspaceShell {
         installWorkspaceKeyboardShortcuts(frame, root, user, connection, workspaceContainer, accountActions);
         activeWorkspaceViewKey = "home";
 
+        final boolean[] backupPromptHandled = new boolean[]{false};
         frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                if (backupPromptHandled[0]) {
+                    return;
+                }
+                backupPromptHandled[0] = true;
+                maybePromptBackupOnLogout(user, connection, frame, accountActions);
+            }
+
             @Override
             public void windowClosed(WindowEvent e) {
                 persistWorkspaceLayout(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0],
                         activeWorkspaceViewKey);
+                Object refresher = sidebar.getClientProperty(CLIENT_RECENT_REFRESHER);
+                if (refresher instanceof Runnable r) {
+                    unregisterRecentItemRefresher(r);
+                }
                 activeMetricsStrip = null;
                 adminMetricsRailHost = null;
                 profitAlertBannerRefreshAction = null;
@@ -1292,9 +1339,69 @@ public final class WorkspaceShell {
         scrollPane.setBorder(null);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
 
+        JPanel recentBlock = new JPanel();
+        recentBlock.setLayout(new BoxLayout(recentBlock, BoxLayout.Y_AXIS));
+        AppUI.applyPanelBackground(recentBlock);
+        recentBlock.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        Runnable refreshRecent = () -> rebuildRecentSidebarBlock(
+                recentBlock, frame, workspaceContainer, user, connection, accountActions);
+        registerRecentItemRefresher(refreshRecent);
+        container.putClientProperty(CLIENT_RECENT_REFRESHER, refreshRecent);
+        refreshRecent.run();
+
         container.add(header, BorderLayout.NORTH);
         container.add(scrollPane, BorderLayout.CENTER);
+        container.add(recentBlock, BorderLayout.SOUTH);
         return container;
+    }
+
+    private static void rebuildRecentSidebarBlock(
+            JPanel recentBlock,
+            JFrame frame,
+            JPanel workspaceContainer,
+            User user,
+            Connection connection,
+            AccountActions accountActions
+    ) {
+        recentBlock.removeAll();
+        JLabel heading = new JLabel("Recent");
+        heading.setFont(heading.getFont().deriveFont(Font.BOLD, 13f));
+        heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        recentBlock.add(heading);
+        recentBlock.add(Box.createVerticalStrut(6));
+        List<RecentItemEntry> snapshot = snapshotRecentItems();
+        if (snapshot.isEmpty()) {
+            JLabel none = new JLabel("No recent items");
+            none.setForeground(AppUI.TEXT_MUTED);
+            none.setAlignmentX(Component.LEFT_ALIGNMENT);
+            recentBlock.add(none);
+        } else {
+            for (RecentItemEntry entry : snapshot) {
+                String label = entry.label() == null || entry.label().isBlank()
+                        ? entry.itemCode()
+                        : entry.itemCode() + " - " + entry.label();
+                JButton recentButton = new JButton(label);
+                recentButton.setToolTipText("Open View Items filtered by " + entry.itemCode());
+                recentButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+                recentButton.setHorizontalAlignment(SwingConstants.LEFT);
+                recentButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+                styleSecondaryButton(recentButton);
+                recentButton.addActionListener(e -> {
+                    workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, entry.itemCode());
+                    try {
+                        showView(workspaceContainer, "View Items",
+                                buildInventoryTablePanel(user, connection, frame, workspaceContainer));
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(frame, "Unable to open view: " + ex.getMessage(),
+                                "View Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                });
+                recentBlock.add(recentButton);
+                recentBlock.add(Box.createVerticalStrut(4));
+            }
+        }
+        recentBlock.revalidate();
+        recentBlock.repaint();
     }
 
     /**
@@ -1346,12 +1453,16 @@ public final class WorkspaceShell {
             items.add(new NavItem("Add Item", () -> buildAddItemPanel(user, connection, workspaceContainer, frame)));
             items.add(new NavItem("Storage Locations", () -> buildStorageLocationsPanel(connection)));
             items.add(new NavItem("View Items", () -> buildInventoryTablePanel(user, connection, frame, workspaceContainer)));
+            items.add(new NavItem("Needs Attention", () -> buildNeedsAttentionPanel(user, connection, frame, workspaceContainer, accountActions)));
         } else {
             items.add(new NavItem("View Items", () -> buildInventoryTablePanel(user, connection, frame, workspaceContainer)));
             items.add(new NavItem("Storage Locations", () -> buildStorageLocationsPanel(connection)));
         }
         items.add(new NavItem("Stock by Location", () -> buildStockByLocationPanel(user, connection)));
         items.add(new NavItem(VIEW_PO_TRACKING, () -> buildPurchaseOrdersPanel(user, connection, workspaceContainer)));
+        if (admin) {
+            items.add(new NavItem("Suppliers", () -> buildSuppliersPanel(user, connection)));
+        }
         items.add(new NavItem("Receive Order", () -> buildReceiveOrderPanel(user, connection, workspaceContainer)));
         if (!admin) {
             items.add(new NavItem("Low Stock Check", () -> buildLowStockPanel(connection)));
@@ -1359,6 +1470,7 @@ public final class WorkspaceShell {
         items.add(new NavItem("Process Sale", () -> buildProcessSalePanel(user, connection, workspaceContainer)));
         items.add(new NavItem("View Sales Transaction", () -> buildSalesPanel(user, connection, workspaceContainer)));
         if (admin) {
+            items.add(new NavItem("Stock Adjustment", () -> buildStockAdjustmentPanel(user, connection)));
             items.add(new NavItem("Write Off Stock", () -> buildWriteOffPanel(user, connection)));
             items.add(new NavItem("Market Prices", () -> buildMarketPricesBulkPanel(user, connection, workspaceContainer)));
             items.add(new NavItem("Change Reorder Triggers", () -> buildAdjustReorderPanel(user, connection, workspaceContainer)));
@@ -1477,6 +1589,7 @@ public final class WorkspaceShell {
      */
     private static final class AdminMetricsRailHost {
         private final Connection connection;
+        private final String username;
         private final JPanel host;
         private final JLabel titleLabel;
         private final JLabel imageLabel;
@@ -1493,6 +1606,7 @@ public final class WorkspaceShell {
 
         private AdminMetricsRailHost(
                 Connection connection,
+                String username,
                 JPanel host,
                 JLabel titleLabel,
                 JLabel imageLabel,
@@ -1506,6 +1620,7 @@ public final class WorkspaceShell {
                 Runnable refreshViewItemsIfOpen
         ) {
             this.connection = connection;
+            this.username = username;
             this.host = host;
             this.titleLabel = titleLabel;
             this.imageLabel = imageLabel;
@@ -1629,12 +1744,28 @@ public final class WorkspaceShell {
                     return;
                 }
                 persistInventoryNotes(connection, selectedItemCode, raw);
+                InventoryAudit.logChange(
+                        connection,
+                        username,
+                        selectedItemCode,
+                        InventoryAudit.CHANGE_NOTE,
+                        0,
+                        "RAIL_NOTE_SAVE",
+                        raw == null ? "" : raw.trim());
                 JOptionPane.showMessageDialog(host, "Note saved.", "Notes", JOptionPane.INFORMATION_MESSAGE);
                 exitNotesQuiet();
                 refillNotesAreaFromDb();
             } catch (SQLException ex) {
                 JOptionPane.showMessageDialog(host, "Database error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
             }
+        }
+
+        private void openItemForNotesEdit(String itemCode) {
+            if (itemCode == null || itemCode.isBlank()) {
+                return;
+            }
+            showItemPhoto(itemCode.trim());
+            enterNotesEditMode();
         }
 
         private void chooseAndReplacePhoto() {
@@ -2175,7 +2306,14 @@ public final class WorkspaceShell {
 
     /** One row in the View Items card shelf (stock or on-order must be &gt; 0). */
     private record ViewItemShelfRow(
-            String itemCode, String itemName, int stock, int onOrder, int reorderTrigger, Double marketPrice
+            String itemCode,
+            String itemName,
+            int stock,
+            int onOrder,
+            int reorderTrigger,
+            Double marketPrice,
+            Double unrealizedMarginPercent,
+            boolean staleMarketPrice
     ) {
     }
 
@@ -2235,25 +2373,24 @@ public final class WorkspaceShell {
 
         List<ViewItemShelfRow> allRows = loadViewItemShelfRows(connection);
         Object prefillSearch = workspaceContainer.getClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT);
-        Object prefillLow = workspaceContainer.getClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY);
         workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, null);
-        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY, null);
 
         JTextField searchField = new JTextField(24);
         styleInput(searchField);
         if (prefillSearch instanceof String s) {
             searchField.setText(s);
         }
-        JCheckBox lowStockOnly = new JCheckBox("Low stock only");
-        lowStockOnly.setOpaque(false);
-        lowStockOnly.setSelected(Boolean.TRUE.equals(prefillLow));
 
         JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         AppUI.applyPanelBackground(filterRow);
         filterRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         filterRow.add(new JLabel("Search code or name"));
         filterRow.add(searchField);
-        filterRow.add(lowStockOnly);
+        final List<ViewItemShelfRow>[] filteredRowsHolder = new List[]{new ArrayList<>()};
+        JButton exportCsv = new JButton("Export CSV");
+        styleSecondaryButton(exportCsv);
+        exportCsv.addActionListener(e -> exportViewItemsCsv(frame, filteredRowsHolder[0]));
+        filterRow.add(exportCsv);
         JLabel matchCount = new JLabel(" ");
         matchCount.setForeground(AppUI.TEXT_MUTED);
         filterRow.add(matchCount);
@@ -2263,16 +2400,11 @@ public final class WorkspaceShell {
         JPanel gridHost = new JPanel(new BorderLayout());
         AppUI.applyPanelBackground(gridHost);
         final JPanel[] selectedCard = new JPanel[1];
-        final JScrollPane[] scrollHolder = new JScrollPane[1];
 
         Runnable rebuildGrid = () -> {
             String q = searchField.getText().trim().toLowerCase(Locale.ROOT);
-            boolean lowOnly = lowStockOnly.isSelected();
             List<ViewItemShelfRow> filtered = new ArrayList<>();
             for (ViewItemShelfRow row : allRows) {
-                if (lowOnly && !isLowStockSku(row.stock(), row.reorderTrigger())) {
-                    continue;
-                }
                 if (!q.isEmpty()) {
                     String code = row.itemCode().toLowerCase(Locale.ROOT);
                     String name = row.itemName().toLowerCase(Locale.ROOT);
@@ -2282,6 +2414,7 @@ public final class WorkspaceShell {
                 }
                 filtered.add(row);
             }
+            filteredRowsHolder[0] = new ArrayList<>(filtered);
             selectedCard[0] = null;
             gridHost.removeAll();
             if (filtered.isEmpty()) {
@@ -2294,7 +2427,7 @@ public final class WorkspaceShell {
                 JPanel scrollBody = new JPanel(new GridBagLayout());
                 scrollBody.setOpaque(true);
                 AppUI.applyPanelBackground(scrollBody);
-                populateViewItemsGrid(scrollBody, user, connection, filtered, selectedCard);
+                populateViewItemsGrid(scrollBody, user, connection, workspaceContainer, filtered, selectedCard);
                 JScrollPane scroll = new JScrollPane(scrollBody,
                         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                         JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -2303,7 +2436,6 @@ public final class WorkspaceShell {
                 scroll.getVerticalScrollBar().setUnitIncrement(16);
                 scroll.setPreferredSize(new Dimension(1080, Math.min(MAIN_FRAME_BASE_H - 260, 520)));
                 gridHost.add(scroll, BorderLayout.CENTER);
-                scrollHolder[0] = scroll;
                 matchCount.setText(filtered.size() + " of " + allRows.size() + " shown");
             }
             gridHost.revalidate();
@@ -2327,7 +2459,6 @@ public final class WorkspaceShell {
             }
         };
         searchField.getDocument().addDocumentListener(filterListener);
-        lowStockOnly.addActionListener(e -> rebuildGrid.run());
 
         rebuildGrid.run();
         centerWrap.add(gridHost, BorderLayout.CENTER);
@@ -2337,12 +2468,19 @@ public final class WorkspaceShell {
 
     private static List<ViewItemShelfRow> loadViewItemShelfRows(Connection connection) throws SQLException {
         List<ViewItemShelfRow> rows = new ArrayList<>();
+        int staleDays = readStaleMarketPriceDays(connection);
         try (PreparedStatement ps = connection.prepareStatement(
                 """
-                SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, `ReOrder Trigger`, `Market Price`
+                SELECT i.`Item Code`,
+                       i.`Item Name`,
+                       i.`Stock`,
+                       i.`On Order`,
+                       i.`ReOrder Trigger`,
+                       i.`Market Price`,
+                       i.market_price_updated_at
                 FROM inventory
-                WHERE `Stock` > 0 OR `On Order` > 0
-                ORDER BY `Item Code` ASC
+                WHERE i.`Stock` > 0 OR i.`On Order` > 0
+                ORDER BY i.`Item Code` ASC
                 """
         )) {
             try (ResultSet rs = ps.executeQuery()) {
@@ -2354,7 +2492,12 @@ public final class WorkspaceShell {
                     int reorder = rs.getInt("ReOrder Trigger");
                     double mp = rs.getDouble("Market Price");
                     Double market = rs.wasNull() ? null : mp;
-                    rows.add(new ViewItemShelfRow(code, name, stock, onOrder, reorder, market));
+                    Double margin = InventoryFifo.unrealizedMarginPercent(connection, code);
+                    String updatedAt = rs.getString("market_price_updated_at");
+                    boolean stale = market == null
+                            || (stock > 0 && (updatedAt == null || updatedAt.isBlank()
+                            || sqlDaysSinceDisplayDate(updatedAt) > staleDays));
+                    rows.add(new ViewItemShelfRow(code, name, stock, onOrder, reorder, market, margin, stale));
                 }
             }
         }
@@ -2365,6 +2508,7 @@ public final class WorkspaceShell {
             JPanel scrollBody,
             User user,
             Connection connection,
+            JPanel workspaceContainer,
             List<ViewItemShelfRow> rows,
             JPanel[] selectedCard
     ) {
@@ -2388,13 +2532,14 @@ public final class WorkspaceShell {
                 JPanel slot = null;
                 if (idx < n) {
                     ViewItemShelfRow row = rows.get(idx);
-                    slot = buildViewItemShelfCard(user, connection, row, card -> {
+                    slot = buildViewItemShelfCard(user, connection, workspaceContainer, row, card -> {
                         if (selectedCard[0] != null && selectedCard[0] != card) {
-                            styleViewItemShelfCard(selectedCard[0], false, false);
+                            styleViewItemShelfCard(selectedCard[0], false);
                         }
                         selectedCard[0] = card;
-                        styleViewItemShelfCard(card, true, isLowStockSku(row.stock(), row.reorderTrigger()));
+                        styleViewItemShelfCard(card, true);
                         notifyAdminItemSelected(row.itemCode());
+                        recordRecentItem(row.itemCode(), row.itemName());
                     });
                 }
 
@@ -2423,6 +2568,7 @@ public final class WorkspaceShell {
     private static JPanel buildViewItemShelfCard(
             User user,
             Connection connection,
+            JPanel workspaceContainer,
             ViewItemShelfRow row,
             Consumer<JPanel> onSelect
     ) {
@@ -2431,7 +2577,9 @@ public final class WorkspaceShell {
         AppUI.markCardSurface(card);
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
         card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        styleViewItemShelfCard(card, false, isLowStockSku(row.stock(), row.reorderTrigger()));
+        card.setOpaque(true);
+        card.setBackground(viewItemMarginTint(row.unrealizedMarginPercent()));
+        styleViewItemShelfCard(card, false);
 
         JComponent photo = buildViewItemPhotoThumb(row.itemCode(), VIEW_ITEM_CARD_PHOTO_PX);
         photo.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -2451,14 +2599,69 @@ public final class WorkspaceShell {
         card.add(Box.createVerticalStrut(2));
         String marketText = row.marketPrice() == null ? "—" : formatUsdMoney(row.marketPrice());
         card.add(viewItemShelfStatLine("Market price:", marketText));
+        card.add(Box.createVerticalStrut(2));
+        String marginText = row.unrealizedMarginPercent() == null
+                ? "—"
+                : String.format(Locale.US, "%.1f%%", row.unrealizedMarginPercent());
+        card.add(viewItemShelfStatLine("Margin:", marginText));
+        if (row.staleMarketPrice()) {
+            JLabel stale = new JLabel("Stale price", SwingConstants.CENTER);
+            stale.setForeground(new Color(0xfbbf24));
+            stale.setFont(stale.getFont().deriveFont(Font.BOLD, 11f));
+            stale.setAlignmentX(Component.CENTER_ALIGNMENT);
+            card.add(Box.createVerticalStrut(4));
+            card.add(stale);
+        }
+
+        JPopupMenu menu = new JPopupMenu();
+        if (user.hasAdminRights()) {
+            JMenuItem editNote = new JMenuItem("Edit note");
+            editNote.addActionListener(e -> openItemNoteEditor(user, connection, card, row.itemCode(), row.itemName()));
+            menu.add(editNote);
+
+            JMenuItem setMarketPrice = new JMenuItem("Set market price");
+            setMarketPrice.addActionListener(e -> showSetMarketPriceDialog(user, connection, card, row.itemCode()));
+            menu.add(setMarketPrice);
+        }
+        JMenuItem openLowStock = new JMenuItem("Open Low Stock Check");
+        openLowStock.addActionListener(e -> {
+            try {
+                showView(workspaceContainer, "Low Stock Check", buildLowStockPanel(connection));
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(card, "Unable to open Low Stock Check: " + ex.getMessage(),
+                        "View Error", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        menu.add(openLowStock);
 
         card.addMouseListener(new MouseAdapter() {
+            private void maybeShowMenu(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    onSelect.accept(card);
+                    menu.show(e.getComponent(), e.getX(), e.getY());
+                }
+            }
+
             @Override
             public void mouseClicked(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    maybeShowMenu(e);
+                    return;
+                }
                 onSelect.accept(card);
                 if (e.getClickCount() >= 2) {
                     showItemDetailDialog(card, user, connection, row.itemCode());
                 }
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShowMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShowMenu(e);
             }
         });
 
@@ -2473,22 +2676,161 @@ public final class WorkspaceShell {
         return line;
     }
 
-    private static void styleViewItemShelfCard(JPanel card, boolean selected, boolean lowStock) {
-        Color border;
-        int width;
-        if (selected) {
-            border = AppUI.PRIMARY;
-            width = 2;
-        } else if (lowStock) {
-            border = AppUI.DANGER;
-            width = 2;
-        } else {
-            border = AppUI.BORDER;
-            width = 1;
-        }
+    private static void styleViewItemShelfCard(JPanel card, boolean selected) {
+        Color border = selected ? AppUI.PRIMARY : AppUI.BORDER;
+        int width = selected ? 2 : 1;
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, width),
                 BorderFactory.createEmptyBorder(12, 12, 12, 12)));
+    }
+
+    private static Color viewItemMarginTint(Double marginPct) {
+        if (marginPct == null) {
+            return AppUI.SURFACE;
+        }
+        if (marginPct >= 10.0) {
+            return new Color(0x1a2a1f);
+        }
+        if (marginPct < -5.0) {
+            return new Color(0x2b1a1a);
+        }
+        return new Color(0x2c2619);
+    }
+
+    private static void openItemNoteEditor(
+            User user,
+            Connection connection,
+            Component parent,
+            String itemCode,
+            String itemName
+    ) {
+        AdminMetricsRailHost rail = adminMetricsRailHost;
+        if (rail != null) {
+            notifyAdminItemSelected(itemCode);
+            rail.openItemForNotesEdit(itemCode);
+            return;
+        }
+        try {
+            String current = fetchInventoryNotes(connection, itemCode);
+            JTextArea editor = new JTextArea(current, 10, 34);
+            editor.setLineWrap(true);
+            editor.setWrapStyleWord(true);
+            JScrollPane scroll = new JScrollPane(editor);
+            int ok = JOptionPane.showConfirmDialog(
+                    parent,
+                    scroll,
+                    "Edit note - " + itemCode + (itemName == null || itemName.isBlank() ? "" : " (" + itemName + ")"),
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE);
+            if (ok != JOptionPane.OK_OPTION) {
+                return;
+            }
+            String raw = editor.getText();
+            if (raw != null && raw.length() > ITEM_NOTES_MAX_CHARS) {
+                JOptionPane.showMessageDialog(parent,
+                        "Notes must be at most " + ITEM_NOTES_MAX_CHARS + " characters.",
+                        "Input",
+                        JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            persistInventoryNotes(connection, itemCode, raw);
+            InventoryAudit.logChange(connection, user.getUsername(), itemCode,
+                    InventoryAudit.CHANGE_NOTE, 0, "VIEW_ITEMS_NOTE_EDIT",
+                    raw == null ? "" : raw.trim());
+            JOptionPane.showMessageDialog(parent, "Note saved.", "Notes", JOptionPane.INFORMATION_MESSAGE);
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(parent, "Database error: " + ex.getMessage(), "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static void showSetMarketPriceDialog(User user, Connection connection, Component parent, String itemCode) {
+        String raw = JOptionPane.showInputDialog(parent, "Enter market price for " + itemCode + ":", "Set market price",
+                JOptionPane.PLAIN_MESSAGE);
+        if (raw == null) {
+            return;
+        }
+        try {
+            Double parsed = parseOptionalMarketPriceInput(raw);
+            if (parsed == null) {
+                JOptionPane.showMessageDialog(parent, "Market price is required.", "Input", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            Double previous = null;
+            try (PreparedStatement sel = connection.prepareStatement(
+                    "SELECT `Market Price` FROM inventory WHERE `Item Code` = ?")) {
+                sel.setString(1, itemCode);
+                try (ResultSet rs = sel.executeQuery()) {
+                    if (rs.next()) {
+                        double v = rs.getDouble(1);
+                        previous = rs.wasNull() ? null : v;
+                    }
+                }
+            }
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "UPDATE inventory SET `Market Price` = ? WHERE `Item Code` = ?")) {
+                ps.setDouble(1, parsed);
+                ps.setString(2, itemCode);
+                ps.executeUpdate();
+            }
+            InventoryAudit.touchMarketPriceUpdated(connection, itemCode);
+            String beforeText = previous == null ? "null" : String.format(Locale.US, "%.4f", previous);
+            String afterText = String.format(Locale.US, "%.4f", parsed);
+            InventoryAudit.logChange(connection, user.getUsername(), itemCode,
+                    InventoryAudit.CHANGE_MARKET_PRICE, 0, "VIEW_ITEMS_CONTEXT_MENU",
+                    "from=" + beforeText + " to=" + afterText);
+            refreshActiveMetricsStripNow();
+            notifyAdminItemSelected(itemCode);
+            JOptionPane.showMessageDialog(parent, "Market price updated.", "Market price",
+                    JOptionPane.INFORMATION_MESSAGE);
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(parent, ex.getMessage(), "Input", JOptionPane.WARNING_MESSAGE);
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(parent, "Database error: " + ex.getMessage(), "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static void exportViewItemsCsv(Component parent, List<ViewItemShelfRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            JOptionPane.showMessageDialog(parent, "No filtered rows to export.", "Export CSV",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Choose export folder");
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if (chooser.showSaveDialog(parent) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path dir = chooser.getSelectedFile().toPath();
+        String base = sanitizeFileName("view_items_filtered_" + System.currentTimeMillis());
+        Path csv = dir.resolve(base + ".csv");
+        try {
+            Files.createDirectories(dir);
+            try (BufferedWriter writer = Files.newBufferedWriter(csv)) {
+                writer.write("Item Code,Item Name,Stock,On Order,Market Price,Margin %");
+                writer.newLine();
+                for (ViewItemShelfRow row : rows) {
+                    String market = row.marketPrice() == null ? "" : String.format(Locale.US, "%.2f", row.marketPrice());
+                    String margin = row.unrealizedMarginPercent() == null ? ""
+                            : String.format(Locale.US, "%.2f", row.unrealizedMarginPercent());
+                    writer.write(csvCell(row.itemCode()) + "," + csvCell(row.itemName()) + ","
+                            + row.stock() + "," + row.onOrder() + "," + market + "," + margin);
+                    writer.newLine();
+                }
+            }
+            JOptionPane.showMessageDialog(parent, "Export complete:\n" + csv, "Export CSV",
+                    JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(parent, "Could not export CSV: " + ex.getMessage(), "Export CSV",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static String csvCell(String value) {
+        String v = value == null ? "" : value.replace("\"", "\"\"");
+        return "\"" + v + "\"";
     }
 
     /** JPEG thumbnail for View Items cards, or a bordered “?” placeholder when no image is saved. */
@@ -2532,6 +2874,7 @@ public final class WorkspaceShell {
         if (itemCode == null || itemCode.isEmpty()) {
             rail.showMetrics();
         } else {
+            recordRecentItem(itemCode, "");
             rail.showItemPhoto(itemCode);
         }
     }
@@ -4110,10 +4453,38 @@ public final class WorkspaceShell {
         JScrollPane pendingScroll = new JScrollPane(pendingTable);
         pendingScroll.setBorder(AppUI.newRoundedBorder(8));
 
+        JButton receiveThisLine = new JButton("Receive this line");
+        styleSecondaryButton(receiveThisLine);
+        receiveThisLine.addActionListener(e -> {
+            int vr = pendingTable.getSelectedRow();
+            if (vr < 0) {
+                JOptionPane.showMessageDialog(panel, "Select a pending line first.");
+                return;
+            }
+            int mr = pendingTable.convertRowIndexToModel(vr);
+            String code = Objects.toString(pendingModel.getValueAt(mr, 1), "").trim();
+            String ref = Objects.toString(pendingModel.getValueAt(mr, 7), "").trim();
+            if (code.isEmpty() || ref.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "Could not resolve item code/reference from selected line.");
+                return;
+            }
+            try {
+                showView(workspaceContainer, "Receive Order",
+                        buildReceiveOrderPanel(user, connection, workspaceContainer, ref, code));
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Unable to open Receive Order: " + ex.getMessage(),
+                        "View Error", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
         JPanel centerBlock = new JPanel(new BorderLayout(8, 8));
         AppUI.applyPanelBackground(centerBlock);
         centerBlock.add(form, BorderLayout.NORTH);
         centerBlock.add(pendingScroll, BorderLayout.CENTER);
+        JPanel pendingFooter = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        AppUI.applyPanelBackground(pendingFooter);
+        pendingFooter.add(receiveThisLine);
+        centerBlock.add(pendingFooter, BorderLayout.SOUTH);
 
         panel.add(centerBlock, BorderLayout.CENTER);
         panel.add(buildActionBar(null, submit), BorderLayout.SOUTH);
@@ -4353,6 +4724,7 @@ public final class WorkspaceShell {
                 int storageLocationId = locPick != null ? locPick.id : DatabaseManager.STORAGE_LOCATION_UNASSIGNED_ID;
                 applyReceive(user, connection, ref, code, qty, purchasePrice, storageLocationId);
                 reloadPendingReceive.run();
+                recordRecentItem(code, queryInventoryItemDescription(connection, code));
                 JOptionPane.showMessageDialog(panel, "Items received successfully.");
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(panel, "Enter a valid quantity.");
@@ -4704,6 +5076,7 @@ public final class WorkspaceShell {
         centerWrap.add(intro, BorderLayout.NORTH);
 
         LinkedHashMap<String, JTextField> codeToPriceField = new LinkedHashMap<>();
+        LinkedHashMap<String, Double> originalPrice = new LinkedHashMap<>();
         List<String> codesOrdered = new ArrayList<>();
         List<String> namesOrdered = new ArrayList<>();
 
@@ -4718,6 +5091,7 @@ public final class WorkspaceShell {
                     String nm = Objects.toString(rs.getString("Item Name"), "");
                     double mp = rs.getDouble("Market Price");
                     boolean mpNull = rs.wasNull();
+                    originalPrice.put(code, mpNull ? null : mp);
 
                     JTextField priceField = new JTextField(mpNull ? "" : String.format(Locale.US, "%.2f", mp), 8);
                     priceField.setBorder(AppUI.newRoundedBorder(8));
@@ -4795,6 +5169,10 @@ public final class WorkspaceShell {
                 try {
                     Double v = parseOptionalMarketPriceInput(entry.getValue().getText());
                     if (v != null) {
+                        Double prior = originalPrice.get(entry.getKey());
+                        if (prior != null && Math.abs(prior - v) < 1e-9) {
+                            continue;
+                        }
                         updates.add(new Object[]{entry.getKey(), v});
                     }
                 } catch (NumberFormatException nf) {
@@ -4816,9 +5194,19 @@ public final class WorkspaceShell {
                 try (PreparedStatement ps = connection.prepareStatement(
                         "UPDATE inventory SET `Market Price` = ? WHERE `Item Code` = ?")) {
                     for (Object[] row : updates) {
-                        ps.setDouble(1, (Double) row[1]);
-                        ps.setString(2, (String) row[0]);
+                        String code = (String) row[0];
+                        Double newPrice = (Double) row[1];
+                        Double prior = originalPrice.get(code);
+                        ps.setDouble(1, newPrice);
+                        ps.setString(2, code);
                         ps.executeUpdate();
+                        InventoryAudit.touchMarketPriceUpdated(connection, code);
+                        String beforeText = prior == null ? "null" : String.format(Locale.US, "%.4f", prior);
+                        String afterText = String.format(Locale.US, "%.4f", newPrice);
+                        InventoryAudit.logChange(connection, user.getUsername(), code,
+                                InventoryAudit.CHANGE_MARKET_PRICE, 0,
+                                "BULK_MARKET_PRICE",
+                                "from=" + beforeText + " to=" + afterText);
                     }
                 }
                 connection.commit();
@@ -4849,6 +5237,435 @@ public final class WorkspaceShell {
         panel.add(centerWrap, BorderLayout.CENTER);
         panel.add(footer, BorderLayout.SOUTH);
         return panel;
+    }
+
+    private static JPanel buildStockAdjustmentPanel(User user, Connection connection) {
+        ensureAdmin(user, "Stock Adjustment");
+        JPanel panel = buildFormPanel("Stock Adjustment");
+        JPanel form = new JPanel(new GridBagLayout());
+        AppUI.applyPanelBackground(form);
+        GridBagConstraints gb = new GridBagConstraints();
+        gb.insets = new Insets(4, 0, 4, 10);
+
+        JTextField itemCode = new JTextField();
+        JTextField itemDesc = new JTextField();
+        JTextField deltaField = new JTextField();
+        JTextField unitCostField = new JTextField();
+        JComboBox<String> reason = new JComboBox<>(new String[]{
+                "COUNT_CORRECTION",
+                "DAMAGED",
+                "REWORK",
+                "SUPPLIER_RETURN",
+                "OTHER"
+        });
+        JTextArea note = new JTextArea(3, 32);
+        styleInput(itemCode, itemDesc, deltaField, unitCostField);
+        styleAutoFilledInventoryField(itemDesc);
+        styleComboMatchInputRow(reason);
+        note.setLineWrap(true);
+        note.setWrapStyleWord(true);
+
+        int r = 0;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Item Code *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(itemCode, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Item Description"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(itemDesc, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Delta (+/- whole number) *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(deltaField, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Unit cost (required when delta > 0)"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(unitCostField, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Reason *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(reason, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.FIRST_LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Note (optional)"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        JScrollPane noteScroll = new JScrollPane(note);
+        noteScroll.setBorder(AppUI.newRoundedBorder(8));
+        form.add(noteScroll, gb);
+
+        wireInventoryItemDescriptionLookup(connection, itemCode, itemDesc);
+
+        JButton submit = new JButton("Apply stock adjustment");
+        AppUI.stylePrimaryButton(submit);
+        submit.addActionListener(e -> {
+            String code = itemCode.getText().trim();
+            if (code.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "Item code is required.");
+                return;
+            }
+            String reasonCode = Objects.toString(reason.getSelectedItem(), "").trim();
+            if (reasonCode.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "Reason is required.");
+                return;
+            }
+            int delta;
+            try {
+                delta = Integer.parseInt(deltaField.getText().trim());
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(panel, "Delta must be a whole number.");
+                return;
+            }
+            double unitCost = 0;
+            if (delta > 0) {
+                String unitCostRaw = unitCostField.getText().trim();
+                if (unitCostRaw.isEmpty()) {
+                    JOptionPane.showMessageDialog(panel, "Unit cost is required when delta is positive.");
+                    return;
+                }
+                try {
+                    unitCost = Double.parseDouble(unitCostRaw);
+                } catch (NumberFormatException ex) {
+                    JOptionPane.showMessageDialog(panel, "Unit cost must be numeric.");
+                    return;
+                }
+                if (unitCost < 0) {
+                    JOptionPane.showMessageDialog(panel, "Unit cost must be zero or greater.");
+                    return;
+                }
+            }
+            try {
+                InventoryAudit.applyStockAdjustment(
+                        connection,
+                        user.getUsername(),
+                        code,
+                        delta,
+                        unitCost,
+                        reasonCode,
+                        note.getText());
+                JOptionPane.showMessageDialog(panel, "Stock adjustment applied.", "Stock Adjustment",
+                        JOptionPane.INFORMATION_MESSAGE);
+                recordRecentItem(code, queryInventoryItemDescription(connection, code));
+                requestMetricsRefresh();
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Database error: " + ex.getMessage(), "Stock Adjustment",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
+        panel.add(form, BorderLayout.NORTH);
+        panel.add(buildActionBar(null, submit), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private static JPanel buildSuppliersPanel(User user, Connection connection) throws SQLException {
+        ensureAdmin(user, "Suppliers");
+        JPanel panel = buildFormPanel("Suppliers");
+        JPanel body = new JPanel(new BorderLayout(0, 10));
+        AppUI.applyPanelBackground(body);
+        body.add(buildSectionText(
+                "Exposure shows pending quantity x purchase price. Days since last receive checks movements with RECEIVE/RECEIVED."),
+                BorderLayout.NORTH);
+
+        DefaultTableModel model = new DefaultTableModel(
+                new String[]{"Supplier", "Open PO Exposure", "Inventory Link Count", "Days Since Last Receive"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        JTable table = new JTable(model);
+        installTableCopyMenu(table);
+        table.setAutoCreateRowSorter(true);
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setBorder(AppUI.newRoundedBorder(8));
+        body.add(scroll, BorderLayout.CENTER);
+
+        Runnable reload = () -> {
+            model.setRowCount(0);
+            try (PreparedStatement ps = connection.prepareStatement(
+                    """
+                    WITH po AS (
+                        SELECT supplier_id, COALESCE(SUM(CAST(`Amount` AS REAL) * `Purchase Price`), 0) AS exposure
+                        FROM pendingOrders
+                        WHERE supplier_id IS NOT NULL AND `Amount` > 0
+                        GROUP BY supplier_id
+                    ),
+                    inv_links AS (
+                        SELECT supplier_id, COUNT(*) AS link_count
+                        FROM inventory
+                        WHERE supplier_id IS NOT NULL
+                        GROUP BY supplier_id
+                    ),
+                    recv AS (
+                        SELECT i.supplier_id AS supplier_id,
+                               MAX(substr(m.`Date`, 7, 4) || '-' || substr(m.`Date`, 4, 2) || '-' || substr(m.`Date`, 1, 2)) AS last_receive_iso
+                        FROM movements m
+                        JOIN inventory i ON i.`Item Code` = m.`Item`
+                        WHERE m.`Type` IN ('RECEIVE', 'RECEIVED')
+                          AND i.supplier_id IS NOT NULL
+                        GROUP BY i.supplier_id
+                    )
+                    SELECT s.name AS supplier_name,
+                           COALESCE(po.exposure, 0) AS po_exposure,
+                           COALESCE(inv_links.link_count, 0) AS inv_links,
+                           CASE
+                               WHEN recv.last_receive_iso IS NULL THEN NULL
+                               ELSE CAST(julianday('now') - julianday(recv.last_receive_iso) AS INTEGER)
+                           END AS days_since_receive
+                    FROM suppliers s
+                    LEFT JOIN po ON po.supplier_id = s.id
+                    LEFT JOIN inv_links ON inv_links.supplier_id = s.id
+                    LEFT JOIN recv ON recv.supplier_id = s.id
+                    WHERE s.active = 1
+                    ORDER BY lower(s.name) ASC
+                    """
+            );
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Integer days = (Integer) rs.getObject("days_since_receive");
+                    model.addRow(new Object[]{
+                            rs.getString("supplier_name"),
+                            formatUsdMoney(rs.getDouble("po_exposure")),
+                            rs.getInt("inv_links"),
+                            days == null ? "Never" : Integer.toString(Math.max(0, days))
+                    });
+                }
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Could not load suppliers: " + ex.getMessage(),
+                        "Suppliers", JOptionPane.ERROR_MESSAGE);
+            }
+            deferPackTableColumns(table);
+        };
+        reload.run();
+
+        JButton refresh = new JButton("Refresh");
+        styleSecondaryButton(refresh);
+        refresh.addActionListener(e -> reload.run());
+        panel.add(body, BorderLayout.CENTER);
+        panel.add(buildActionBar(refresh, null), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private static JPanel buildNeedsAttentionPanel(
+            User user,
+            Connection connection,
+            JFrame frame,
+            JPanel workspaceContainer,
+            AccountActions accountActions
+    ) throws SQLException {
+        ensureAdmin(user, "Needs Attention");
+        JPanel panel = buildFormPanel("Needs Attention");
+        JPanel cards = new JPanel(new GridLayout(0, 1, 0, 10));
+        AppUI.applyPanelBackground(cards);
+
+        int lowStock = countLowStockItems(connection);
+        int deadStock = countDeadStockItems(connection, 90);
+        int staleMarket = countStaleMarketPriceItems(connection);
+        int missingPhotos = countMissingPhotos(connection);
+        boolean backupWarning = hasBackupAgeWarning(connection, accountActions);
+
+        cards.add(buildNeedsAttentionCard(
+                "Low Stock",
+                Integer.toString(lowStock),
+                "Open Low Stock Check",
+                () -> showView(workspaceContainer, "Low Stock Check", buildLowStockPanel(connection))));
+        cards.add(buildNeedsAttentionCard(
+                "Dead Stock (90d)",
+                Integer.toString(deadStock),
+                "Open Dead Stock Report",
+                () -> {
+                    pendingReportPreselectType = "Dead stock";
+                    showView(workspaceContainer, "Generate Reports", buildReportsPanel(user, connection));
+                }));
+        cards.add(buildNeedsAttentionCard(
+                "Stale Market Price",
+                Integer.toString(staleMarket),
+                "Open Market Prices",
+                () -> showView(workspaceContainer, "Market Prices", buildMarketPricesBulkPanel(user, connection, workspaceContainer))));
+        cards.add(buildNeedsAttentionCard(
+                "Missing Photos",
+                Integer.toString(missingPhotos),
+                "Open View Items",
+                () -> showView(workspaceContainer, "View Items", buildInventoryTablePanel(user, connection, frame, workspaceContainer))));
+        cards.add(buildNeedsAttentionCard(
+                "Backup Age Warning",
+                backupWarning ? "1" : "0",
+                "Open Admin Tools",
+                () -> showView(workspaceContainer, VIEW_ADMIN_TOOLS,
+                        buildAdministrationToolsPanel(user, connection, frame, accountActions))));
+
+        panel.add(cards, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private static JPanel buildNeedsAttentionCard(String title, String value, String actionLabel, CheckedAction action) {
+        JPanel card = new JPanel(new BorderLayout(8, 8));
+        AppUI.markCardSurface(card);
+        card.setBorder(BorderFactory.createCompoundBorder(
+                AppUI.newRoundedBorder(8),
+                BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+
+        JLabel heading = new JLabel(title);
+        heading.setFont(heading.getFont().deriveFont(Font.BOLD, 14f));
+        JLabel count = new JLabel(value);
+        count.setFont(count.getFont().deriveFont(Font.BOLD, 22f));
+        JPanel top = new JPanel(new BorderLayout());
+        AppUI.applyPanelBackground(top);
+        top.setOpaque(false);
+        top.add(heading, BorderLayout.WEST);
+        top.add(count, BorderLayout.EAST);
+        JButton actionButton = new JButton(actionLabel);
+        styleSecondaryButton(actionButton);
+        actionButton.addActionListener(e -> {
+            try {
+                action.run();
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(card, "Unable to open target view: " + ex.getMessage(),
+                        "View Error", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        card.add(top, BorderLayout.NORTH);
+        card.add(actionButton, BorderLayout.SOUTH);
+        return card;
+    }
+
+    private static int countLowStockItems(Connection connection) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM inventory WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    private static int countDeadStockItems(Connection connection, int inactiveDays) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT i.`Item Code` AS code,
+                           MAX(s.`DateISO`) AS last_sale,
+                           CASE
+                               WHEN MAX(s.`DateISO`) IS NULL THEN -1
+                               ELSE CAST(julianday('now') - julianday(MAX(s.`DateISO`)) AS INTEGER)
+                           END AS days_idle
+                    FROM inventory i
+                    LEFT JOIN sales s ON s.`Item Code` = i.`Item Code`
+                    WHERE i.`Stock` > 0
+                    GROUP BY i.`Item Code`
+                    HAVING last_sale IS NULL OR days_idle >= ?
+                ) x
+                """
+        )) {
+            ps.setInt(1, inactiveDays);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    private static int countStaleMarketPriceItems(Connection connection) throws SQLException {
+        int staleDays = readStaleMarketPriceDays(connection);
+        try (PreparedStatement ps = connection.prepareStatement(
+                """
+                SELECT COUNT(*)
+                FROM inventory i
+                WHERE i.`Stock` > 0
+                  AND (
+                        i.`Market Price` IS NULL
+                        OR i.market_price_updated_at IS NULL
+                        OR trim(i.market_price_updated_at) = ''
+                        OR (
+                            julianday('now') - julianday(
+                                substr(i.market_price_updated_at, 7, 4) || '-' ||
+                                substr(i.market_price_updated_at, 4, 2) || '-' ||
+                                substr(i.market_price_updated_at, 1, 2)
+                            )
+                        ) > ?
+                  )
+                """
+        )) {
+            ps.setInt(1, staleDays);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    private static int countMissingPhotos(Connection connection) throws SQLException {
+        int missing = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT `Item Code` FROM inventory WHERE `Stock` > 0 OR `On Order` > 0");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                String code = rs.getString(1);
+                if (!Files.isReadable(itemImagePath(code))) {
+                    missing++;
+                }
+            }
+        }
+        return missing;
+    }
+
+    private static boolean hasBackupAgeWarning(Connection connection, AccountActions accountActions) throws SQLException {
+        try {
+            int reminderDays = readBackupReminderDays(connection);
+            int since = accountActions.daysSinceLatestBackup();
+            return since < 0 || since > reminderDays;
+        } catch (IOException ex) {
+            return true;
+        }
     }
 
     /** Builds admin-only write-off panel for stock reductions. */
@@ -5947,6 +6764,9 @@ public final class WorkspaceShell {
             String now = dateTime.nowDisplayString();
             try {
                 processSaleTransaction(connection, user, items, reference, now, rawNote);
+                for (SaleDraftLine line : items.values()) {
+                    recordRecentItem(line.itemCode, line.itemDescription);
+                }
                 JOptionPane.showMessageDialog(panel, "Sale completed. Reference: " + reference);
                 transactionNote.setText("");
                 showView(workspaceContainer, "View Sales Transaction", buildSalesPanel(user, connection, workspaceContainer));
@@ -6294,19 +7114,14 @@ public final class WorkspaceShell {
         private static final Color PROFIT_BG = new Color(0x0f2419);
         private static final Color PROFIT_FG = AppUI.SUCCESS;
         private static final Color PROFIT_BORDER = new Color(0x059669);
-        private static final Color LOW_STOCK_BG = new Color(0x2a1515);
-        private static final Color LOW_STOCK_FG = AppUI.DANGER;
-        private static final Color LOW_STOCK_BORDER = new Color(0x991b1b);
 
         private final AlertMarqueeStripe setupStripe;
         private final AlertMarqueeStripe profitStripe;
-        private final AlertMarqueeStripe lowStockStripe;
 
         ProfitAlertMarqueeBanner() {
             setLayout(new BorderLayout());
             setupStripe = new AlertMarqueeStripe(SETUP_BG, SETUP_FG, SETUP_BORDER);
             profitStripe = new AlertMarqueeStripe(PROFIT_BG, PROFIT_FG, PROFIT_BORDER);
-            lowStockStripe = new AlertMarqueeStripe(LOW_STOCK_BG, LOW_STOCK_FG, LOW_STOCK_BORDER);
         }
 
         @Override
@@ -6317,75 +7132,56 @@ public final class WorkspaceShell {
         void stopTimer() {
             setupStripe.stopTimer();
             profitStripe.stopTimer();
-            lowStockStripe.stopTimer();
         }
 
         void refreshFromDatabase(Connection connection) {
             setupStripe.stopTimer();
             profitStripe.stopTimer();
-            lowStockStripe.stopTimer();
             removeAll();
-            JPanel stack = new JPanel();
-            stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
-            stack.setOpaque(false);
-            boolean any = false;
+            setLayout(new BorderLayout());
             try {
-                List<String> lowLabels = lowStockItemLabels(connection);
-                if (!lowLabels.isEmpty()) {
-                    stack.add(lowStockStripe);
-                    lowStockStripe.prepareMarquee("Low stock — reorder soon: "
-                            + profitAlertItemListPhrase(lowLabels));
-                    lowStockStripe.startTimerIfShowing();
-                    any = true;
-                }
-
-                boolean profitHidden = "1".equals(
-                        DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_BANNER_DISABLED));
-                if (!profitHidden) {
-                    String goalRaw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_GOAL_PCT);
-                    int profitGoal = -1;
-                    if (goalRaw != null && !goalRaw.isBlank()) {
-                        try {
-                            profitGoal = Integer.parseInt(goalRaw.trim());
-                        } catch (NumberFormatException ex) {
-                            profitGoal = -1;
-                        }
-                    }
-                    boolean profitOk = profitGoal >= 0 && profitGoal <= 10_000_000;
-                    if (!profitOk) {
-                        stack.add(setupStripe);
-                        setupStripe.prepareMarquee(PROFIT_ALERT_BANNER_SETUP_MESSAGE);
-                        setupStripe.startTimerIfShowing();
-                    } else {
-                        List<String> plabels = profitAlertQualifyingItemLabels(connection, profitGoal);
-                        String profitMsg = "Goal of " + profitGoal + "% profit on the following items: "
-                                + profitAlertItemListPhrase(plabels);
-                        stack.add(profitStripe);
-                        profitStripe.prepareMarquee(profitMsg);
-                        profitStripe.startTimerIfShowing();
-                    }
-                    any = true;
-                }
-
-                if (!any) {
+                if ("1".equals(DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_BANNER_DISABLED))) {
                     setVisible(false);
                     revalidate();
                     repaint();
                     return;
                 }
-                add(stack, BorderLayout.CENTER);
+                String goalRaw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_GOAL_PCT);
+                int profitGoal = -1;
+                if (goalRaw != null && !goalRaw.isBlank()) {
+                    try {
+                        profitGoal = Integer.parseInt(goalRaw.trim());
+                    } catch (NumberFormatException ex) {
+                        profitGoal = -1;
+                    }
+                }
+                boolean profitOk = profitGoal >= 0 && profitGoal <= 10_000_000;
+                final AlertMarqueeStripe activeStripe;
+                if (!profitOk) {
+                    add(setupStripe, BorderLayout.CENTER);
+                    setupStripe.prepareMarquee(PROFIT_ALERT_BANNER_SETUP_MESSAGE);
+                    activeStripe = setupStripe;
+                } else {
+                    List<String> plabels = profitAlertQualifyingItemLabels(connection, profitGoal);
+                    String profitMsg = "Goal of " + profitGoal + "% profit on the following items: "
+                            + profitAlertItemListPhrase(plabels);
+                    add(profitStripe, BorderLayout.CENTER);
+                    profitStripe.prepareMarquee(profitMsg);
+                    activeStripe = profitStripe;
+                }
                 setVisible(true);
                 revalidate();
                 repaint();
+                SwingUtilities.invokeLater(activeStripe::startTimerIfShowing);
             } catch (SQLException ex) {
                 removeAll();
                 setLayout(new BorderLayout());
                 add(setupStripe, BorderLayout.CENTER);
-                setupStripe.prepareMarquee("Workspace alerts: could not load data.");
-                setupStripe.startTimerIfShowing();
+                setupStripe.prepareMarquee("Profit alert: could not load data.");
                 setVisible(true);
                 revalidate();
                 repaint();
+                SwingUtilities.invokeLater(setupStripe::startTimerIfShowing);
             }
         }
     }
@@ -6489,6 +7285,11 @@ public final class WorkspaceShell {
         column.add(profitAlert);
 
         column.add(Box.createVerticalStrut(22));
+        JPanel changeHistory = buildChangeHistoryAdminToolsSection(connection, frame);
+        changeHistory.setAlignmentX(Component.LEFT_ALIGNMENT);
+        column.add(changeHistory);
+
+        column.add(Box.createVerticalStrut(22));
         JPanel backupSection = buildBackupSectionPanel(user, connection, accountActions, frame);
         backupSection.setAlignmentX(Component.LEFT_ALIGNMENT);
         column.add(backupSection);
@@ -6500,6 +7301,60 @@ public final class WorkspaceShell {
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         shell.add(scroll, BorderLayout.CENTER);
         return shell;
+    }
+
+    private static JPanel buildChangeHistoryAdminToolsSection(Connection connection, JFrame frame) {
+        JPanel block = buildSectionPanel();
+        block.add(adminToolsSectionTitle("Change history"));
+        block.add(Box.createVerticalStrut(6));
+        block.add(buildSectionText("Recent stock adjustments, market-price edits, and note saves."));
+        block.add(Box.createVerticalStrut(8));
+
+        DefaultTableModel model = new DefaultTableModel(
+                new String[]{"When", "Item Code", "User", "Type", "Delta", "Reason", "Details"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        JTable table = new JTable(model);
+        installTableCopyMenu(table);
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setBorder(AppUI.newRoundedBorder(8));
+        scroll.setPreferredSize(new Dimension(780, 180));
+        scroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        Runnable reload = () -> {
+            model.setRowCount(0);
+            try {
+                for (InventoryAudit.ChangeLogRow row : InventoryAudit.loadRecentChanges(connection, 200)) {
+                    model.addRow(new Object[]{
+                            row.createdAt(),
+                            row.itemCode(),
+                            row.username(),
+                            row.changeType(),
+                            row.quantityDelta(),
+                            row.reason(),
+                            row.details()
+                    });
+                }
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(frame, "Could not load change history: " + ex.getMessage(),
+                        VIEW_ADMIN_TOOLS, JOptionPane.WARNING_MESSAGE);
+            }
+            deferPackTableColumns(table);
+        };
+        reload.run();
+
+        JButton refresh = new JButton("Refresh change history");
+        styleSecondaryButton(refresh);
+        refresh.setAlignmentX(Component.LEFT_ALIGNMENT);
+        refresh.addActionListener(e -> reload.run());
+        block.add(scroll);
+        block.add(Box.createVerticalStrut(8));
+        block.add(refresh);
+        block.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return block;
     }
 
     /**
@@ -6521,7 +7376,17 @@ public final class WorkspaceShell {
         gb.insets = new Insets(4, 0, 4, 10);
 
         JComboBox<String> reportType = user.hasAdminRights()
-                ? new JComboBox<>(new String[]{"Sales", "Users", "Movements", "Dead stock", "Item margins"})
+                ? new JComboBox<>(new String[]{
+                "Sales",
+                "Users",
+                "Movements",
+                "Dead stock",
+                "Item margins",
+                "Sell-through",
+                "Inventory turnover",
+                "P/L by item",
+                "Bin utilization"
+        })
                 : new JComboBox<>(new String[]{"Sales"});
         JTextField search = new JTextField();
         JTextField fromDate = new JTextField();
@@ -6604,12 +7469,18 @@ public final class WorkspaceShell {
             String selected = (String) reportType.getSelectedItem();
             boolean deadStock = "Dead stock".equals(selected);
             boolean margins = "Item margins".equals(selected);
+            boolean plByItem = "P/L by item".equals(selected);
+            boolean binUtil = "Bin utilization".equals(selected);
             inactiveLabel.setEnabled(deadStock);
             inactiveDays.setEnabled(deadStock);
-            fromDate.setEnabled(!margins);
-            toDate.setEnabled(!margins);
+            fromDate.setEnabled(!margins && !plByItem && !binUtil);
+            toDate.setEnabled(!margins && !plByItem && !binUtil);
         };
         reportType.addActionListener(e -> syncReportFieldState.run());
+        if (pendingReportPreselectType != null && !pendingReportPreselectType.isBlank()) {
+            reportType.setSelectedItem(pendingReportPreselectType);
+            pendingReportPreselectType = null;
+        }
         syncReportFieldState.run();
 
         JPanel headingFilter = new JPanel(new BorderLayout(0, 10));
@@ -6699,13 +7570,18 @@ public final class WorkspaceShell {
                     }
                     return;
                 }
-                from = LocalDate.parse(fromDate.getText().trim());
-                to = LocalDate.parse(toDate.getText().trim());
+                if ("P/L by item".equals(selected) || "Bin utilization".equals(selected)) {
+                    from = null;
+                    to = null;
+                } else {
+                    from = LocalDate.parse(fromDate.getText().trim());
+                    to = LocalDate.parse(toDate.getText().trim());
+                }
             } catch (DateTimeParseException ex) {
                 JOptionPane.showMessageDialog(reportsPanel, "Enter valid dates using yyyy-MM-dd.");
                 return;
             }
-            if (from.isAfter(to)) {
+            if (from != null && to != null && from.isAfter(to)) {
                 JOptionPane.showMessageDialog(reportsPanel, "From date must be before or equal to To date.");
                 return;
             }
@@ -6725,6 +7601,34 @@ public final class WorkspaceShell {
                     latestReport[0] = movementData;
                     latestReportType[0] = "movements";
                     deferPackTableColumns(usersTable);
+                } else if ("Sell-through".equals(selected)) {
+                    ReportData data = buildSellThroughReportData(connection, search.getText().trim(), from, to);
+                    populateReportTable(analyticsTableModel, data);
+                    cardLayout.show(contentCards, "Analytics");
+                    latestReport[0] = data;
+                    latestReportType[0] = "sell_through";
+                    deferPackTableColumns(analyticsTable);
+                } else if ("Inventory turnover".equals(selected)) {
+                    ReportData data = buildInventoryTurnoverReportData(connection, from, to);
+                    populateReportTable(analyticsTableModel, data);
+                    cardLayout.show(contentCards, "Analytics");
+                    latestReport[0] = data;
+                    latestReportType[0] = "inventory_turnover";
+                    deferPackTableColumns(analyticsTable);
+                } else if ("P/L by item".equals(selected)) {
+                    ReportData data = buildProfitLossByItemLifetimeReportData(connection, search.getText().trim());
+                    populateReportTable(analyticsTableModel, data);
+                    cardLayout.show(contentCards, "Analytics");
+                    latestReport[0] = data;
+                    latestReportType[0] = "pl_by_item";
+                    deferPackTableColumns(analyticsTable);
+                } else if ("Bin utilization".equals(selected)) {
+                    ReportData data = buildBinUtilizationReportData(connection, search.getText().trim());
+                    populateReportTable(analyticsTableModel, data);
+                    cardLayout.show(contentCards, "Analytics");
+                    latestReport[0] = data;
+                    latestReportType[0] = "bin_utilization";
+                    deferPackTableColumns(analyticsTable);
                 } else {
                     ReportData salesData = buildSalesReportData(connection, search.getText().trim(), from, to);
                     populateReportTable(salesTableModel, salesData);
@@ -6882,6 +7786,24 @@ public final class WorkspaceShell {
         reminderRow.add(reminderDaysField);
         reminderRow.add(saveReminderDays);
         content.add(reminderRow);
+
+        JCheckBox backupOnLogout = new JCheckBox("Prompt backup on logout when reminder threshold is exceeded");
+        backupOnLogout.setOpaque(false);
+        try {
+            backupOnLogout.setSelected(readBackupOnLogoutEnabled(connection));
+        } catch (SQLException ex) {
+            backupOnLogout.setSelected(false);
+        }
+        backupOnLogout.addActionListener(e -> {
+            try {
+                DatabaseManager.putAppMetadata(connection, DatabaseManager.META_BACKUP_ON_LOGOUT_ENABLED,
+                        backupOnLogout.isSelected() ? "1" : "0");
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(frame, "Could not save backup-on-logout setting: " + ex.getMessage());
+            }
+        });
+        backupOnLogout.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(backupOnLogout);
         content.add(Box.createVerticalStrut(8));
 
         DefaultTableModel tableModel = new DefaultTableModel(new Object[]{"Backup folder"}, 0) {
@@ -7152,6 +8074,177 @@ public final class WorkspaceShell {
         return data;
     }
 
+    private static ReportData buildSellThroughReportData(
+            Connection connection,
+            String search,
+            LocalDate from,
+            LocalDate to
+    ) throws SQLException {
+        ReportData data = new ReportData("Sell-through Report");
+        String sql = """
+                SELECT i.`Item Code` AS code,
+                       i.`Item Name` AS iname,
+                       i.`Stock` AS stock,
+                       COALESCE(s.units_sold, 0) AS units_sold
+                FROM inventory i
+                LEFT JOIN (
+                    SELECT `Item Code`, SUM(`Amount`) AS units_sold
+                    FROM sales
+                    WHERE `DateISO` BETWEEN ? AND ?
+                    GROUP BY `Item Code`
+                ) s ON s.`Item Code` = i.`Item Code`
+                WHERE (i.`Stock` > 0 OR COALESCE(s.units_sold, 0) > 0)
+                  AND (? = '' OR lower(i.`Item Code`) LIKE lower(?) OR lower(i.`Item Name`) LIKE lower(?))
+                ORDER BY (CAST(COALESCE(s.units_sold, 0) AS REAL) / CASE WHEN i.`Stock` > 0 THEN i.`Stock` ELSE 1 END) DESC, code ASC
+                """;
+        int rows = 0;
+        int soldTotal = 0;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            String like = "%" + search + "%";
+            ps.setString(1, from.toString() + " 00:00:00");
+            ps.setString(2, to.toString() + " 23:59:59");
+            ps.setString(3, search);
+            ps.setString(4, like);
+            ps.setString(5, like);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows++;
+                    int sold = rs.getInt("units_sold");
+                    int stock = rs.getInt("stock");
+                    soldTotal += sold;
+                    double rate = sold * 100.0 / Math.max(1, stock);
+                    data.rows.add(new Object[]{
+                            rs.getString("code"),
+                            rs.getString("iname"),
+                            sold,
+                            stock,
+                            String.format(Locale.US, "%.1f%%", rate)
+                    });
+                }
+            }
+        }
+        data.columns = new String[]{"Item Code", "Item Name", "Units Sold", "Current Stock", "Sell-through %"};
+        data.summary.put("Rows", String.valueOf(rows));
+        data.summary.put("Total Units Sold", String.valueOf(soldTotal));
+        data.summary.put("Date Range", from + " to " + to);
+        return data;
+    }
+
+    private static ReportData buildInventoryTurnoverReportData(Connection connection, LocalDate from, LocalDate to)
+            throws SQLException {
+        ReportData data = new ReportData("Inventory Turnover Report");
+        double cogs = 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(SUM(`Total Cost`), 0) FROM sales WHERE `DateISO` BETWEEN ? AND ?")) {
+            ps.setString(1, from.toString() + " 00:00:00");
+            ps.setString(2, to.toString() + " 23:59:59");
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    cogs = rs.getDouble(1);
+                }
+            }
+        }
+        double avgInventoryApprox = InventoryFifo.totalMarketValueOfOnHandStock(connection);
+        double turnover = cogs / Math.max(1.0, avgInventoryApprox);
+        data.columns = new String[]{"Metric", "Value"};
+        data.rows.add(new Object[]{"COGS (period)", formatUsdMoney(cogs)});
+        data.rows.add(new Object[]{"Avg inventory value (approx)", formatUsdMoney(avgInventoryApprox)});
+        data.rows.add(new Object[]{"Inventory turnover", String.format(Locale.US, "%.3f", turnover)});
+        data.summary.put("Date Range", from + " to " + to);
+        data.summary.put("Approximation", "Average inventory value uses current total market value of on-hand stock.");
+        return data;
+    }
+
+    private static ReportData buildProfitLossByItemLifetimeReportData(Connection connection, String search)
+            throws SQLException {
+        ReportData data = new ReportData("P/L by Item (Lifetime)");
+        String sql = """
+                SELECT s.`Item Code` AS code,
+                       COALESCE(MAX(s.`Item Name`), '') AS iname,
+                       COALESCE(SUM(s.`Amount`), 0) AS units,
+                       COALESCE(SUM(s.`Total Price`), 0) AS revenue,
+                       COALESCE(SUM(s.`Total Cost`), 0) AS cost
+                FROM sales s
+                WHERE (? = '' OR lower(s.`Item Code`) LIKE lower(?) OR lower(s.`Item Name`) LIKE lower(?))
+                GROUP BY s.`Item Code`
+                ORDER BY (revenue - cost) DESC, code ASC
+                """;
+        double totalProfit = 0;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            String like = "%" + search + "%";
+            ps.setString(1, search);
+            ps.setString(2, like);
+            ps.setString(3, like);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    double revenue = rs.getDouble("revenue");
+                    double cost = rs.getDouble("cost");
+                    double profit = revenue - cost;
+                    totalProfit += profit;
+                    data.rows.add(new Object[]{
+                            rs.getString("code"),
+                            rs.getString("iname"),
+                            rs.getInt("units"),
+                            formatUsdMoney(revenue),
+                            formatUsdMoney(cost),
+                            formatUsdMoney(profit)
+                    });
+                }
+            }
+        }
+        data.columns = new String[]{"Item Code", "Item Name", "Units Sold", "Revenue", "Cost", "P/L"};
+        data.summary.put("Total P/L", formatUsdMoney(totalProfit));
+        data.summary.put("Scope", "Lifetime sales grouped by item");
+        return data;
+    }
+
+    private static ReportData buildBinUtilizationReportData(Connection connection, String search) throws SQLException {
+        ReportData data = new ReportData("Bin Utilization Report");
+        data.columns = new String[]{"Item Code", "Item Name", "Stock", "Binned Qty", "Binned %"};
+        if (!DatabaseManager.hasInventoryStorageQtyTable(connection)) {
+            data.rows.add(new Object[]{"—", "Storage tables are not available for this database.", 0, 0, "0.0%"});
+            data.summary.put("Overall Bin Utilization", "0.0%");
+            return data;
+        }
+        double overall = InventoryFifo.binUtilizationPercent(connection);
+        String sql = """
+                SELECT i.`Item Code` AS code,
+                       i.`Item Name` AS iname,
+                       i.`Stock` AS stock,
+                       COALESCE(SUM(CASE WHEN s.location_id != ? THEN s.qty ELSE 0 END), 0) AS binned
+                FROM inventory i
+                LEFT JOIN inventory_storage_qty s ON s.item_code = i.`Item Code`
+                WHERE i.`Stock` > 0
+                  AND (? = '' OR lower(i.`Item Code`) LIKE lower(?) OR lower(i.`Item Name`) LIKE lower(?))
+                GROUP BY i.`Item Code`, i.`Item Name`, i.`Stock`
+                ORDER BY i.`Item Code` ASC
+                """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            String like = "%" + search + "%";
+            ps.setInt(1, DatabaseManager.STORAGE_LOCATION_UNASSIGNED_ID);
+            ps.setString(2, search);
+            ps.setString(3, like);
+            ps.setString(4, like);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    int stock = rs.getInt("stock");
+                    int binned = rs.getInt("binned");
+                    double pct = stock <= 0 ? 0 : Math.min(100.0, (binned * 100.0) / stock);
+                    data.rows.add(new Object[]{
+                            rs.getString("code"),
+                            rs.getString("iname"),
+                            stock,
+                            binned,
+                            String.format(Locale.US, "%.1f%%", pct)
+                    });
+                }
+            }
+        }
+        data.summary.put("Overall Bin Utilization", String.format(Locale.US, "%.1f%%", overall));
+        data.summary.put("Note", "Overall % excludes the Unassigned location bucket.");
+        return data;
+    }
+
     /**
      * Queries sales rows and summary metrics for reporting and CSV export.
      *
@@ -7330,6 +8423,21 @@ public final class WorkspaceShell {
                 displayDateTime.substring(3, 5) + "-" +
                 displayDateTime.substring(0, 2) +
                 displayDateTime.substring(10);
+    }
+
+    private static int sqlDaysSinceDisplayDate(String displayDateTime) {
+        if (displayDateTime == null || displayDateTime.length() < 10) {
+            return Integer.MAX_VALUE;
+        }
+        try {
+            LocalDate d = LocalDate.parse(
+                    displayDateTime.substring(6, 10) + "-"
+                            + displayDateTime.substring(3, 5) + "-"
+                            + displayDateTime.substring(0, 2));
+            return (int) Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(d, LocalDate.now()));
+        } catch (RuntimeException ex) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     private static void populateReportTable(DefaultTableModel model, ReportData data) {

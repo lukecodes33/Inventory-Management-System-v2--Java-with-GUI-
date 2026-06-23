@@ -33,6 +33,10 @@ public final class DatabaseManager {
     public static final String META_WORKSPACE_PHOTO_SPLIT_DIVIDER = "workspace_photo_split_divider";
     /** {@code app_metadata} key: warn admins when no backup within this many days (default {@code 7}). */
     public static final String META_BACKUP_REMINDER_DAYS = "backup_reminder_days";
+    /** {@code app_metadata} key: {@code "1"} prompts for backup on logout when backup is older than threshold. */
+    public static final String META_BACKUP_ON_LOGOUT_ENABLED = "backup_on_logout_enabled";
+    /** {@code app_metadata} key: flag market price stale when not updated within this many days (default {@code 90}). */
+    public static final String META_STALE_MARKET_PRICE_DAYS = "stale_market_price_days";
 
     /** {@code true} when per-location qty table exists (enterprise schema initialized). */
     public static boolean hasInventoryStorageQtyTable(Connection connection) throws SQLException {
@@ -472,6 +476,12 @@ public final class DatabaseManager {
                     WHERE `Purchased From` IS NOT NULL AND LENGTH(TRIM(`Purchased From`)) > 0
                     """);
         }
+        if (!columnExists(connection, "Inventory", "market_price_updated_at")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE Inventory ADD COLUMN market_price_updated_at TEXT");
+            }
+        }
+        InventoryAudit.ensureChangeLogTable(connection);
     }
 
     /**
