@@ -429,10 +429,13 @@ public final class InventoryFifo {
                 "SELECT `Market Price` FROM inventory WHERE `Item Code` = ? AND `Stock` > 0 LIMIT 1")) {
             ps.setString(1, itemCode.trim());
             try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next() || rs.wasNull()) {
+                if (!rs.next()) {
                     return null;
                 }
                 double market = rs.getDouble(1);
+                if (rs.wasNull()) {
+                    return null;
+                }
                 return ((market - avg) / avg) * 100.0;
             }
         }

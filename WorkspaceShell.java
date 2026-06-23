@@ -302,7 +302,6 @@ public final class WorkspaceShell {
     private static volatile Consumer<Connection> profitAlertBannerRefreshAction;
     /** Sidebar card key for the view currently shown in the workspace (persisted on close). */
     private static volatile String activeWorkspaceViewKey = "home";
-    private static volatile String pendingReportPreselectType;
     private static final int RECENT_ITEMS_MAX = 10;
     private static final Deque<RecentItemEntry> recentItems = new ArrayDeque<>();
     private static final List<Runnable> recentItemRefreshers = new ArrayList<>();
@@ -1453,7 +1452,6 @@ public final class WorkspaceShell {
             items.add(new NavItem("Add Item", () -> buildAddItemPanel(user, connection, workspaceContainer, frame)));
             items.add(new NavItem("Storage Locations", () -> buildStorageLocationsPanel(connection)));
             items.add(new NavItem("View Items", () -> buildInventoryTablePanel(user, connection, frame, workspaceContainer)));
-            items.add(new NavItem("Needs Attention", () -> buildNeedsAttentionPanel(user, connection, frame, workspaceContainer, accountActions)));
         } else {
             items.add(new NavItem("View Items", () -> buildInventoryTablePanel(user, connection, frame, workspaceContainer)));
             items.add(new NavItem("Storage Locations", () -> buildStorageLocationsPanel(connection)));
@@ -1470,7 +1468,6 @@ public final class WorkspaceShell {
         items.add(new NavItem("Process Sale", () -> buildProcessSalePanel(user, connection, workspaceContainer)));
         items.add(new NavItem("View Sales Transaction", () -> buildSalesPanel(user, connection, workspaceContainer)));
         if (admin) {
-            items.add(new NavItem("Stock Adjustment", () -> buildStockAdjustmentPanel(user, connection)));
             items.add(new NavItem("Write Off Stock", () -> buildWriteOffPanel(user, connection)));
             items.add(new NavItem("Market Prices", () -> buildMarketPricesBulkPanel(user, connection, workspaceContainer)));
             items.add(new NavItem("Change Reorder Triggers", () -> buildAdjustReorderPanel(user, connection, workspaceContainer)));
@@ -2478,7 +2475,7 @@ public final class WorkspaceShell {
                        i.`ReOrder Trigger`,
                        i.`Market Price`,
                        i.market_price_updated_at
-                FROM inventory
+                FROM inventory i
                 WHERE i.`Stock` > 0 OR i.`On Order` > 0
                 ORDER BY i.`Item Code` ASC
                 """
@@ -5239,176 +5236,6 @@ public final class WorkspaceShell {
         return panel;
     }
 
-    private static JPanel buildStockAdjustmentPanel(User user, Connection connection) {
-        ensureAdmin(user, "Stock Adjustment");
-        JPanel panel = buildFormPanel("Stock Adjustment");
-        JPanel form = new JPanel(new GridBagLayout());
-        AppUI.applyPanelBackground(form);
-        GridBagConstraints gb = new GridBagConstraints();
-        gb.insets = new Insets(4, 0, 4, 10);
-
-        JTextField itemCode = new JTextField();
-        JTextField itemDesc = new JTextField();
-        JTextField deltaField = new JTextField();
-        JTextField unitCostField = new JTextField();
-        JComboBox<String> reason = new JComboBox<>(new String[]{
-                "COUNT_CORRECTION",
-                "DAMAGED",
-                "REWORK",
-                "SUPPLIER_RETURN",
-                "OTHER"
-        });
-        JTextArea note = new JTextArea(3, 32);
-        styleInput(itemCode, itemDesc, deltaField, unitCostField);
-        styleAutoFilledInventoryField(itemDesc);
-        styleComboMatchInputRow(reason);
-        note.setLineWrap(true);
-        note.setWrapStyleWord(true);
-
-        int r = 0;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Item Code *"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        form.add(itemCode, gb);
-
-        r++;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Item Description"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        form.add(itemDesc, gb);
-
-        r++;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Delta (+/- whole number) *"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        form.add(deltaField, gb);
-
-        r++;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Unit cost (required when delta > 0)"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        form.add(unitCostField, gb);
-
-        r++;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Reason *"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        form.add(reason, gb);
-
-        r++;
-        gb.gridx = 0;
-        gb.gridy = r;
-        gb.anchor = GridBagConstraints.FIRST_LINE_END;
-        gb.fill = GridBagConstraints.NONE;
-        gb.weightx = 0;
-        form.add(new JLabel("Note (optional)"), gb);
-        gb.gridx = 1;
-        gb.anchor = GridBagConstraints.LINE_START;
-        gb.fill = GridBagConstraints.HORIZONTAL;
-        gb.weightx = 1;
-        JScrollPane noteScroll = new JScrollPane(note);
-        noteScroll.setBorder(AppUI.newRoundedBorder(8));
-        form.add(noteScroll, gb);
-
-        wireInventoryItemDescriptionLookup(connection, itemCode, itemDesc);
-
-        JButton submit = new JButton("Apply stock adjustment");
-        AppUI.stylePrimaryButton(submit);
-        submit.addActionListener(e -> {
-            String code = itemCode.getText().trim();
-            if (code.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Item code is required.");
-                return;
-            }
-            String reasonCode = Objects.toString(reason.getSelectedItem(), "").trim();
-            if (reasonCode.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Reason is required.");
-                return;
-            }
-            int delta;
-            try {
-                delta = Integer.parseInt(deltaField.getText().trim());
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(panel, "Delta must be a whole number.");
-                return;
-            }
-            double unitCost = 0;
-            if (delta > 0) {
-                String unitCostRaw = unitCostField.getText().trim();
-                if (unitCostRaw.isEmpty()) {
-                    JOptionPane.showMessageDialog(panel, "Unit cost is required when delta is positive.");
-                    return;
-                }
-                try {
-                    unitCost = Double.parseDouble(unitCostRaw);
-                } catch (NumberFormatException ex) {
-                    JOptionPane.showMessageDialog(panel, "Unit cost must be numeric.");
-                    return;
-                }
-                if (unitCost < 0) {
-                    JOptionPane.showMessageDialog(panel, "Unit cost must be zero or greater.");
-                    return;
-                }
-            }
-            try {
-                InventoryAudit.applyStockAdjustment(
-                        connection,
-                        user.getUsername(),
-                        code,
-                        delta,
-                        unitCost,
-                        reasonCode,
-                        note.getText());
-                JOptionPane.showMessageDialog(panel, "Stock adjustment applied.", "Stock Adjustment",
-                        JOptionPane.INFORMATION_MESSAGE);
-                recordRecentItem(code, queryInventoryItemDescription(connection, code));
-                requestMetricsRefresh();
-            } catch (SQLException ex) {
-                JOptionPane.showMessageDialog(panel, "Database error: " + ex.getMessage(), "Stock Adjustment",
-                        JOptionPane.ERROR_MESSAGE);
-            }
-        });
-
-        panel.add(form, BorderLayout.NORTH);
-        panel.add(buildActionBar(null, submit), BorderLayout.SOUTH);
-        return panel;
-    }
-
     private static JPanel buildSuppliersPanel(User user, Connection connection) throws SQLException {
         ensureAdmin(user, "Suppliers");
         JPanel panel = buildFormPanel("Suppliers");
@@ -5496,176 +5323,6 @@ public final class WorkspaceShell {
         panel.add(body, BorderLayout.CENTER);
         panel.add(buildActionBar(refresh, null), BorderLayout.SOUTH);
         return panel;
-    }
-
-    private static JPanel buildNeedsAttentionPanel(
-            User user,
-            Connection connection,
-            JFrame frame,
-            JPanel workspaceContainer,
-            AccountActions accountActions
-    ) throws SQLException {
-        ensureAdmin(user, "Needs Attention");
-        JPanel panel = buildFormPanel("Needs Attention");
-        JPanel cards = new JPanel(new GridLayout(0, 1, 0, 10));
-        AppUI.applyPanelBackground(cards);
-
-        int lowStock = countLowStockItems(connection);
-        int deadStock = countDeadStockItems(connection, 90);
-        int staleMarket = countStaleMarketPriceItems(connection);
-        int missingPhotos = countMissingPhotos(connection);
-        boolean backupWarning = hasBackupAgeWarning(connection, accountActions);
-
-        cards.add(buildNeedsAttentionCard(
-                "Low Stock",
-                Integer.toString(lowStock),
-                "Open Low Stock Check",
-                () -> showView(workspaceContainer, "Low Stock Check", buildLowStockPanel(connection))));
-        cards.add(buildNeedsAttentionCard(
-                "Dead Stock (90d)",
-                Integer.toString(deadStock),
-                "Open Dead Stock Report",
-                () -> {
-                    pendingReportPreselectType = "Dead stock";
-                    showView(workspaceContainer, "Generate Reports", buildReportsPanel(user, connection));
-                }));
-        cards.add(buildNeedsAttentionCard(
-                "Stale Market Price",
-                Integer.toString(staleMarket),
-                "Open Market Prices",
-                () -> showView(workspaceContainer, "Market Prices", buildMarketPricesBulkPanel(user, connection, workspaceContainer))));
-        cards.add(buildNeedsAttentionCard(
-                "Missing Photos",
-                Integer.toString(missingPhotos),
-                "Open View Items",
-                () -> showView(workspaceContainer, "View Items", buildInventoryTablePanel(user, connection, frame, workspaceContainer))));
-        cards.add(buildNeedsAttentionCard(
-                "Backup Age Warning",
-                backupWarning ? "1" : "0",
-                "Open Admin Tools",
-                () -> showView(workspaceContainer, VIEW_ADMIN_TOOLS,
-                        buildAdministrationToolsPanel(user, connection, frame, accountActions))));
-
-        panel.add(cards, BorderLayout.CENTER);
-        return panel;
-    }
-
-    private static JPanel buildNeedsAttentionCard(String title, String value, String actionLabel, CheckedAction action) {
-        JPanel card = new JPanel(new BorderLayout(8, 8));
-        AppUI.markCardSurface(card);
-        card.setBorder(BorderFactory.createCompoundBorder(
-                AppUI.newRoundedBorder(8),
-                BorderFactory.createEmptyBorder(10, 12, 10, 12)));
-
-        JLabel heading = new JLabel(title);
-        heading.setFont(heading.getFont().deriveFont(Font.BOLD, 14f));
-        JLabel count = new JLabel(value);
-        count.setFont(count.getFont().deriveFont(Font.BOLD, 22f));
-        JPanel top = new JPanel(new BorderLayout());
-        AppUI.applyPanelBackground(top);
-        top.setOpaque(false);
-        top.add(heading, BorderLayout.WEST);
-        top.add(count, BorderLayout.EAST);
-        JButton actionButton = new JButton(actionLabel);
-        styleSecondaryButton(actionButton);
-        actionButton.addActionListener(e -> {
-            try {
-                action.run();
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(card, "Unable to open target view: " + ex.getMessage(),
-                        "View Error", JOptionPane.ERROR_MESSAGE);
-            }
-        });
-        card.add(top, BorderLayout.NORTH);
-        card.add(actionButton, BorderLayout.SOUTH);
-        return card;
-    }
-
-    private static int countLowStockItems(Connection connection) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT COUNT(*) FROM inventory WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`");
-             ResultSet rs = ps.executeQuery()) {
-            return rs.next() ? rs.getInt(1) : 0;
-        }
-    }
-
-    private static int countDeadStockItems(Connection connection, int inactiveDays) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                """
-                SELECT COUNT(*)
-                FROM (
-                    SELECT i.`Item Code` AS code,
-                           MAX(s.`DateISO`) AS last_sale,
-                           CASE
-                               WHEN MAX(s.`DateISO`) IS NULL THEN -1
-                               ELSE CAST(julianday('now') - julianday(MAX(s.`DateISO`)) AS INTEGER)
-                           END AS days_idle
-                    FROM inventory i
-                    LEFT JOIN sales s ON s.`Item Code` = i.`Item Code`
-                    WHERE i.`Stock` > 0
-                    GROUP BY i.`Item Code`
-                    HAVING last_sale IS NULL OR days_idle >= ?
-                ) x
-                """
-        )) {
-            ps.setInt(1, inactiveDays);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getInt(1) : 0;
-            }
-        }
-    }
-
-    private static int countStaleMarketPriceItems(Connection connection) throws SQLException {
-        int staleDays = readStaleMarketPriceDays(connection);
-        try (PreparedStatement ps = connection.prepareStatement(
-                """
-                SELECT COUNT(*)
-                FROM inventory i
-                WHERE i.`Stock` > 0
-                  AND (
-                        i.`Market Price` IS NULL
-                        OR i.market_price_updated_at IS NULL
-                        OR trim(i.market_price_updated_at) = ''
-                        OR (
-                            julianday('now') - julianday(
-                                substr(i.market_price_updated_at, 7, 4) || '-' ||
-                                substr(i.market_price_updated_at, 4, 2) || '-' ||
-                                substr(i.market_price_updated_at, 1, 2)
-                            )
-                        ) > ?
-                  )
-                """
-        )) {
-            ps.setInt(1, staleDays);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getInt(1) : 0;
-            }
-        }
-    }
-
-    private static int countMissingPhotos(Connection connection) throws SQLException {
-        int missing = 0;
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT `Item Code` FROM inventory WHERE `Stock` > 0 OR `On Order` > 0");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                String code = rs.getString(1);
-                if (!Files.isReadable(itemImagePath(code))) {
-                    missing++;
-                }
-            }
-        }
-        return missing;
-    }
-
-    private static boolean hasBackupAgeWarning(Connection connection, AccountActions accountActions) throws SQLException {
-        try {
-            int reminderDays = readBackupReminderDays(connection);
-            int since = accountActions.daysSinceLatestBackup();
-            return since < 0 || since > reminderDays;
-        } catch (IOException ex) {
-            return true;
-        }
     }
 
     /** Builds admin-only write-off panel for stock reductions. */
@@ -7383,7 +7040,6 @@ public final class WorkspaceShell {
                 "Dead stock",
                 "Item margins",
                 "Sell-through",
-                "Inventory turnover",
                 "P/L by item",
                 "Bin utilization"
         })
@@ -7477,10 +7133,6 @@ public final class WorkspaceShell {
             toDate.setEnabled(!margins && !plByItem && !binUtil);
         };
         reportType.addActionListener(e -> syncReportFieldState.run());
-        if (pendingReportPreselectType != null && !pendingReportPreselectType.isBlank()) {
-            reportType.setSelectedItem(pendingReportPreselectType);
-            pendingReportPreselectType = null;
-        }
         syncReportFieldState.run();
 
         JPanel headingFilter = new JPanel(new BorderLayout(0, 10));
@@ -7607,13 +7259,6 @@ public final class WorkspaceShell {
                     cardLayout.show(contentCards, "Analytics");
                     latestReport[0] = data;
                     latestReportType[0] = "sell_through";
-                    deferPackTableColumns(analyticsTable);
-                } else if ("Inventory turnover".equals(selected)) {
-                    ReportData data = buildInventoryTurnoverReportData(connection, from, to);
-                    populateReportTable(analyticsTableModel, data);
-                    cardLayout.show(contentCards, "Analytics");
-                    latestReport[0] = data;
-                    latestReportType[0] = "inventory_turnover";
                     deferPackTableColumns(analyticsTable);
                 } else if ("P/L by item".equals(selected)) {
                     ReportData data = buildProfitLossByItemLifetimeReportData(connection, search.getText().trim());
@@ -8127,31 +7772,6 @@ public final class WorkspaceShell {
         data.summary.put("Rows", String.valueOf(rows));
         data.summary.put("Total Units Sold", String.valueOf(soldTotal));
         data.summary.put("Date Range", from + " to " + to);
-        return data;
-    }
-
-    private static ReportData buildInventoryTurnoverReportData(Connection connection, LocalDate from, LocalDate to)
-            throws SQLException {
-        ReportData data = new ReportData("Inventory Turnover Report");
-        double cogs = 0;
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT COALESCE(SUM(`Total Cost`), 0) FROM sales WHERE `DateISO` BETWEEN ? AND ?")) {
-            ps.setString(1, from.toString() + " 00:00:00");
-            ps.setString(2, to.toString() + " 23:59:59");
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    cogs = rs.getDouble(1);
-                }
-            }
-        }
-        double avgInventoryApprox = InventoryFifo.totalMarketValueOfOnHandStock(connection);
-        double turnover = cogs / Math.max(1.0, avgInventoryApprox);
-        data.columns = new String[]{"Metric", "Value"};
-        data.rows.add(new Object[]{"COGS (period)", formatUsdMoney(cogs)});
-        data.rows.add(new Object[]{"Avg inventory value (approx)", formatUsdMoney(avgInventoryApprox)});
-        data.rows.add(new Object[]{"Inventory turnover", String.format(Locale.US, "%.3f", turnover)});
-        data.summary.put("Date Range", from + " to " + to);
-        data.summary.put("Approximation", "Average inventory value uses current total market value of on-hand stock.");
         return data;
     }
 
