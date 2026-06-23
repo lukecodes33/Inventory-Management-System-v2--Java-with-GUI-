@@ -154,6 +154,9 @@ public final class FirstAdministratorSetupDialog {
         panel.add(createButton, gbc);
 
         dialog.add(panel, BorderLayout.CENTER);
+        if (AppUI.usesEmbeddedTitleBar()) {
+            dialog.add(AppUI.createApplicationTitleBar("Welcome — Create administrator"), BorderLayout.NORTH);
+        }
 
         final Outcome[] holder = {null};
         final boolean[] submitted = {false};
@@ -218,6 +221,7 @@ public final class FirstAdministratorSetupDialog {
             }
         });
 
+        AppUI.applyWindowChrome(dialog);
         AppUI.styleWindow(dialog);
         dialog.setLocationRelativeTo(null);
         dialog.setVisible(true);

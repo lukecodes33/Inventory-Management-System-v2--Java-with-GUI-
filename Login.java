@@ -15,6 +15,7 @@ public class Login {
 
     /** @param args unused JVM launch arguments */
     public static void main(String[] args) {
+        AppUI.installPlatformDarkChrome();
         AppUI.initialize();
         try {
             databaseCheck();

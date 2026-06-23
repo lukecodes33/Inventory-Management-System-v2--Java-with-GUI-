@@ -19,6 +19,11 @@ public final class DatabaseManager {
     /** Sentinel row for stock not tied to a user-named bin ({@link #initializeEnterpriseDatabase} guarantees it exists when storage tables exist). */
     public static final int STORAGE_LOCATION_UNASSIGNED_ID = 1;
 
+    /** {@code app_metadata} key: integer profit % goal (market vs weighted-average FIFO unit cost on remaining layers). Absent = not configured. */
+    public static final String META_PROFIT_ALERT_GOAL_PCT = "profit_alert_goal_pct";
+    /** {@code app_metadata} key: {@code "1"} hides the workspace profit-alert marquee for all users. */
+    public static final String META_PROFIT_ALERT_BANNER_DISABLED = "profit_alert_banner_disabled";
+
     /** {@code true} when per-location qty table exists (enterprise schema initialized). */
     public static boolean hasInventoryStorageQtyTable(Connection connection) throws SQLException {
         return tableExists(connection, "inventory_storage_qty");
@@ -42,6 +47,8 @@ public final class DatabaseManager {
 
     /**
      * Opens a configured SQLite connection with application pragmas applied.
+     * When the enterprise {@code Inventory} table already exists, runs {@link #ensureSchemaEvolution(Connection)}
+     * so migrations (including {@code suppliers}) apply on every session — not only at first-time DB init.
      *
      * @return open configured connection
      * @throws SQLException when connection cannot be opened
@@ -50,6 +57,9 @@ public final class DatabaseManager {
         ensureDriverLoaded();
         Connection connection = DriverManager.getConnection("jdbc:sqlite:" + getDatabasePath());
         applyPragmas(connection);
+        if (tableExists(connection, "Inventory")) {
+            ensureSchemaEvolution(connection);
+        }
         return connection;
     }
 
@@ -160,6 +170,7 @@ public final class DatabaseManager {
                     "Item Code" TEXT NOT NULL,
                     "Amount" INTEGER NOT NULL,
                     "Purchase Price" REAL NOT NULL DEFAULT 0,
+                    "Remaining Payment" REAL NOT NULL DEFAULT 0,
                     "Purchased From" TEXT NOT NULL DEFAULT '',
                     "Reference" TEXT NOT NULL,
                     "User" TEXT NOT NULL,
@@ -176,7 +187,8 @@ public final class DatabaseManager {
                     "User" TEXT NOT NULL,
                     "Date" TEXT NOT NULL,
                     "DateISO" TEXT,
-                    "Note" TEXT
+                    "Note" TEXT,
+                    storage_location_id INTEGER
                 )""",
                 """
                 CREATE TABLE IF NOT EXISTS inventory_cost_layers (
@@ -279,6 +291,11 @@ public final class DatabaseManager {
                 statement.execute("ALTER TABLE pendingOrders ADD COLUMN \"Purchased From\" TEXT NOT NULL DEFAULT ''");
             }
         }
+        if (!columnExists(connection, "pendingOrders", "Remaining Payment")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE pendingOrders ADD COLUMN \"Remaining Payment\" REAL NOT NULL DEFAULT 0");
+            }
+        }
         if (!columnExists(connection, "movements", "Reason")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("ALTER TABLE movements ADD COLUMN \"Reason\" TEXT");
@@ -335,12 +352,18 @@ public final class DatabaseManager {
                 statement.execute("ALTER TABLE sales ADD COLUMN \"Note\" TEXT");
             }
         }
+        if (!columnExists(connection, "sales", "storage_location_id")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE sales ADD COLUMN storage_location_id INTEGER");
+            }
+        }
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate(
                     "UPDATE sales SET \"DateISO\" = (substr(\"Date\", 7, 4) || '-' || substr(\"Date\", 4, 2) || '-' || substr(\"Date\", 1, 2) || substr(\"Date\", 11)) " +
                             "WHERE \"DateISO\" IS NULL AND length(\"Date\") >= 19"
             );
         }
+        ensureSuppliersSchema(connection);
         if (!tableExists(connection, "inventory_cost_layers")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("""
@@ -357,6 +380,125 @@ public final class DatabaseManager {
             }
         }
         ensureStorageLocationsAndBuckets(connection);
+    }
+
+    /**
+     * Removes legacy customer-order tables/columns when present, then ensures {@code suppliers} and
+     * {@code Inventory.supplier_id} / {@code pendingOrders.supplier_id} from legacy text columns.
+     */
+    private static void ensureSuppliersSchema(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("DROP INDEX IF EXISTS idx_sales_customer_order_line");
+        }
+        if (columnExists(connection, "sales", "customer_order_line_id")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE sales DROP COLUMN customer_order_line_id");
+            }
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("DROP TABLE IF EXISTS customer_order_lines");
+            statement.execute("DROP TABLE IF EXISTS customer_orders");
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS suppliers (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        phone TEXT,
+                        email TEXT,
+                        notes TEXT,
+                        active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                    """);
+        }
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT DISTINCT TRIM(`Supplier`) AS n FROM Inventory
+                     WHERE `Supplier` IS NOT NULL AND LENGTH(TRIM(`Supplier`)) > 0
+                     UNION
+                     SELECT DISTINCT TRIM(`Purchased From`) AS n FROM pendingOrders
+                     WHERE `Purchased From` IS NOT NULL AND LENGTH(TRIM(`Purchased From`)) > 0
+                     """)) {
+            while (rs.next()) {
+                String n = rs.getString("n");
+                if (n == null || n.isBlank()) {
+                    continue;
+                }
+                try (PreparedStatement ins = connection.prepareStatement(
+                        "INSERT OR IGNORE INTO suppliers (name, active, created_at) VALUES (?, 1, datetime('now'))")) {
+                    ins.setString(1, n.trim());
+                    ins.executeUpdate();
+                }
+            }
+        }
+        if (!columnExists(connection, "Inventory", "supplier_id")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE Inventory ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)");
+            }
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    UPDATE Inventory SET supplier_id = (
+                        SELECT s.id FROM suppliers s
+                        WHERE LOWER(s.name) = LOWER(TRIM(COALESCE(Inventory.`Supplier`, '')))
+                        LIMIT 1
+                    )
+                    WHERE `Supplier` IS NOT NULL AND LENGTH(TRIM(`Supplier`)) > 0
+                    """);
+        }
+        if (!columnExists(connection, "pendingOrders", "supplier_id")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE pendingOrders ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)");
+            }
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    UPDATE pendingOrders SET supplier_id = (
+                        SELECT s.id FROM suppliers s
+                        WHERE LOWER(s.name) = LOWER(TRIM(COALESCE(pendingOrders.`Purchased From`, '')))
+                        LIMIT 1
+                    )
+                    WHERE `Purchased From` IS NOT NULL AND LENGTH(TRIM(`Purchased From`)) > 0
+                    """);
+        }
+    }
+
+    /**
+     * Returns {@code suppliers.id} for {@code rawName}, inserting an active row when missing (trimmed, non-empty).
+     *
+     * @throws SQLException            when the database fails
+     * @throws IllegalArgumentException when {@code rawName} is null or blank after trim
+     */
+    public static int ensureSupplier(Connection connection, String rawName) throws SQLException {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.isEmpty()) {
+            throw new IllegalArgumentException("Supplier name is required.");
+        }
+        try (PreparedStatement sel = connection.prepareStatement(
+                "SELECT id FROM suppliers WHERE name = ? COLLATE NOCASE LIMIT 1")) {
+            sel.setString(1, name);
+            try (ResultSet rs = sel.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        }
+        try (PreparedStatement ins = connection.prepareStatement(
+                "INSERT INTO suppliers (name, active, created_at) VALUES (?, 1, datetime('now'))")) {
+            ins.setString(1, name);
+            ins.executeUpdate();
+        }
+        try (PreparedStatement sel = connection.prepareStatement(
+                "SELECT id FROM suppliers WHERE name = ? COLLATE NOCASE LIMIT 1")) {
+            sel.setString(1, name);
+            try (ResultSet rs = sel.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        }
+        throw new SQLException("Could not resolve supplier id after insert: " + name);
     }
 
     /**
@@ -690,6 +832,54 @@ public final class DatabaseManager {
     }
 
     /**
+     * Reads a row from {@code app_metadata}, or {@code null} when missing.
+     *
+     * @param connection open JDBC session
+     * @param key        metadata key
+     * @return stored value or {@code null}
+     * @throws SQLException when the query fails
+     */
+    public static String getAppMetadata(Connection connection, String key) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT value FROM app_metadata WHERE key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString("value") : null;
+            }
+        }
+    }
+
+    /**
+     * Inserts or replaces a row in {@code app_metadata}.
+     *
+     * @param connection open JDBC session
+     * @param key        metadata key
+     * @param value      stored text (not null)
+     * @throws SQLException when the update fails
+     */
+    public static void putAppMetadata(Connection connection, String key, String value) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)")) {
+            ps.setString(1, key);
+            ps.setString(2, value);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Deletes a {@code app_metadata} row when present.
+     *
+     * @param connection open JDBC session
+     * @param key        metadata key
+     * @throws SQLException when the delete fails
+     */
+    public static void deleteAppMetadata(Connection connection, String key) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM app_metadata WHERE key = ?")) {
+            ps.setString(1, key);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
      * Writes a security-relevant event to the audit log.
      *
      * @param connection active database connection
@@ -728,6 +918,9 @@ public final class DatabaseManager {
                 statement.executeUpdate("DELETE FROM pendingOrders");
                 statement.executeUpdate("DELETE FROM movements");
                 statement.executeUpdate("DELETE FROM Inventory");
+                if (tableExists(connection, "suppliers")) {
+                    statement.executeUpdate("DELETE FROM suppliers");
+                }
                 if (tableExists(connection, "storage_locations")) {
                     statement.executeUpdate("DELETE FROM storage_locations WHERE id <> " + STORAGE_LOCATION_UNASSIGNED_ID);
                 }
