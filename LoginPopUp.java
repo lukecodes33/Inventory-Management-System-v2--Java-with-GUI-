@@ -77,6 +77,9 @@ public class LoginPopUp {
         gbc.anchor = GridBagConstraints.EAST;
         gbc.fill = GridBagConstraints.NONE;
         panel.add(loginButton, gbc);
+        if (AppUI.usesEmbeddedTitleBar()) {
+            dialog.add(AppUI.createApplicationTitleBar("Inventory Management System"), BorderLayout.NORTH);
+        }
         dialog.add(panel, BorderLayout.CENTER);
 
         final String[] usernameHolder = {null};
@@ -98,6 +101,7 @@ public class LoginPopUp {
             }
         });
 
+        AppUI.applyWindowChrome(dialog);
         AppUI.styleWindow(dialog);
         dialog.setLocationRelativeTo(null);
         dialog.setVisible(true);
