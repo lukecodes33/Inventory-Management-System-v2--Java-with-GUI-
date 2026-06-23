@@ -14,6 +14,9 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Window;
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -391,6 +394,41 @@ public class AccountActions {
             names.sort(Comparator.reverseOrder());
             return names;
         }
+    }
+
+    private static final DateTimeFormatter BACKUP_FOLDER_TS = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
+    private static final String BACKUP_FOLDER_PREFIX = "database-";
+
+    /**
+     * Days since the newest folder under {@code database_backups}, or {@code -1} when none exist or names are unreadable.
+     */
+    public int daysSinceLatestBackup() throws IOException {
+        Path backupDirectory = Paths.get("database_backups");
+        if (!Files.isDirectory(backupDirectory)) {
+            return -1;
+        }
+        LocalDateTime newest = null;
+        try (Stream<Path> stream = Files.list(backupDirectory)) {
+            for (Path p : stream.filter(Files::isDirectory).toList()) {
+                String name = p.getFileName().toString();
+                if (!name.startsWith(BACKUP_FOLDER_PREFIX)) {
+                    continue;
+                }
+                String ts = name.substring(BACKUP_FOLDER_PREFIX.length());
+                try {
+                    LocalDateTime parsed = LocalDateTime.parse(ts, BACKUP_FOLDER_TS);
+                    if (newest == null || parsed.isAfter(newest)) {
+                        newest = parsed;
+                    }
+                } catch (Exception ignored) {
+                    // Skip folders that do not match the timestamp suffix.
+                }
+            }
+        }
+        if (newest == null) {
+            return -1;
+        }
+        return (int) ChronoUnit.DAYS.between(newest.toLocalDate(), LocalDateTime.now().toLocalDate());
     }
 
     /** Opens the backup root folder in the system file manager. */

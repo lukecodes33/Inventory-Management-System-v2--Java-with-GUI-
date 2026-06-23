@@ -30,6 +30,10 @@ import javax.swing.table.TableModel;
 import javax.swing.table.JTableHeader;
 import javax.swing.table.TableRowSorter;
 import javax.swing.Timer;
+import javax.swing.AbstractAction;
+import javax.swing.ActionMap;
+import javax.swing.InputMap;
+import javax.swing.KeyStroke;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.DocumentEvent;
 import java.awt.BorderLayout;
@@ -52,7 +56,9 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.MouseEvent;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
@@ -145,6 +151,11 @@ public final class WorkspaceShell {
 
     /** {@link JPanel#getClientProperty(Object)} key for sidebar nav selection sync. */
     private static final String CLIENT_NAV_SIDEBAR_SELECTOR = "ims.NavSidebarSelector";
+    /** View Items: open with low-stock filter pre-enabled. */
+    private static final String CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY = "ims.viewItemsLowStockOnly";
+    /** View Items: pre-fill search field text. */
+    private static final String CLIENT_VIEW_ITEMS_SEARCH_TEXT = "ims.viewItemsSearchText";
+    private static final int DEFAULT_BACKUP_REMINDER_DAYS = 7;
 
     /** CardLayout orphans prior components if the same sidebar key builds a new panel; we remove the old instance before re-adding. */
     private static final String CLIENT_WORKSPACE_CARD_REGISTRY = "ims.workspaceCardRegistry";
@@ -223,27 +234,76 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Top session strip labeled with signed-in username.
+     * Top session strip labeled with signed-in username and optional low-stock / backup status.
      *
      * @param user session identity
      * @return bordered north strip component ready for frame attachment
      */
-    private static JPanel buildSessionTopBar(User user) {
+    private static JPanel buildSessionTopBar(
+            User user,
+            Connection connection,
+            JFrame frame,
+            JPanel workspaceContainer,
+            AccountActions accountActions
+    ) {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER),
                 BorderFactory.createEmptyBorder(10, 18, 10, 18)));
         AppUI.applyPanelBackground(bar);
 
-        String line = user.getUsername();
-        JLabel brand = new JLabel(line, SwingConstants.CENTER);
+        JLabel brand = new JLabel(user.getUsername(), SwingConstants.CENTER);
         Font base = brand.getFont();
         brand.setFont(base.deriveFont(Font.BOLD, 16f));
         brand.setForeground(AppUI.TEXT);
         bar.add(brand, BorderLayout.CENTER);
 
+        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 14, 0));
+        AppUI.applyPanelBackground(east);
+        east.setOpaque(false);
+        try {
+            int lowCount = countLowStockSkus(connection);
+            if (lowCount > 0) {
+                JButton lowLink = new JButton(lowCount == 1 ? "1 low-stock item" : lowCount + " low-stock items");
+                lowLink.setBorderPainted(false);
+                lowLink.setContentAreaFilled(false);
+                lowLink.setFocusPainted(false);
+                lowLink.setForeground(AppUI.DANGER);
+                lowLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                lowLink.addActionListener(e -> openViewItemsWithFilters(workspaceContainer, frame, user, connection, "", true));
+                east.add(lowLink);
+            }
+        } catch (SQLException ignored) {
+            // Omit status chip when the count cannot be loaded.
+        }
+        if (user.hasAdminRights()) {
+            try {
+                int reminderDays = readBackupReminderDays(connection);
+                int since = accountActions.daysSinceLatestBackup();
+                if (since < 0 || since > reminderDays) {
+                    String backupText = since < 0 ? "No backups found" : "Backup " + since + "d ago";
+                    JButton backupLink = new JButton(backupText);
+                    backupLink.setBorderPainted(false);
+                    backupLink.setContentAreaFilled(false);
+                    backupLink.setFocusPainted(false);
+                    backupLink.setForeground(SETUP_FG);
+                    backupLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    backupLink.addActionListener(e -> showView(workspaceContainer, VIEW_ADMIN_TOOLS,
+                            buildAdministrationToolsPanel(user, connection, frame, accountActions)));
+                    east.add(backupLink);
+                }
+            } catch (SQLException | IOException ignored) {
+                // Omit backup chip when status cannot be loaded.
+            }
+        }
+        if (east.getComponentCount() > 0) {
+            bar.add(east, BorderLayout.EAST);
+        }
+
         return bar;
     }
+
+    private static final Color SETUP_FG = new Color(0xfbbf24);
 
     /** Live session strip; cleared when the workspace frame closes. */
     private static volatile FinancialMetricsStrip activeMetricsStrip;
@@ -253,6 +313,8 @@ public final class WorkspaceShell {
 
     /** While the workspace frame is open: recomputes the bottom profit-alert banner from {@code app_metadata}. */
     private static volatile Consumer<Connection> profitAlertBannerRefreshAction;
+    /** Sidebar card key for the view currently shown in the workspace (persisted on close). */
+    private static volatile String activeWorkspaceViewKey = "home";
 
     /**
      * Refreshes the scrolling profit-alert banner after settings change (invokes on the EDT).
@@ -265,6 +327,257 @@ public final class WorkspaceShell {
             return;
         }
         SwingUtilities.invokeLater(() -> action.accept(connection));
+    }
+
+    private static int readBackupReminderDays(Connection connection) throws SQLException {
+        String raw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_BACKUP_REMINDER_DAYS);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_BACKUP_REMINDER_DAYS;
+        }
+        try {
+            int v = Integer.parseInt(raw.trim());
+            return v < 1 ? DEFAULT_BACKUP_REMINDER_DAYS : Math.min(v, 365);
+        } catch (NumberFormatException ex) {
+            return DEFAULT_BACKUP_REMINDER_DAYS;
+        }
+    }
+
+    private static boolean isLowStockSku(int stock, int reorderTrigger) {
+        return reorderTrigger > 0 && reorderTrigger >= stock;
+    }
+
+    private static int countLowStockSkus(Connection connection) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM inventory WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`"
+        )) {
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    private static List<String> lowStockItemLabels(Connection connection) throws SQLException {
+        List<String> labels = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                """
+                SELECT `Item Code`, `Item Name`, `Stock`, `ReOrder Trigger`
+                FROM inventory
+                WHERE `ReOrder Trigger` > 0 AND `ReOrder Trigger` >= `Stock`
+                ORDER BY `Item Code` COLLATE NOCASE ASC
+                """
+        )) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String code = rs.getString("Item Code");
+                    String nm = Objects.toString(rs.getString("Item Name"), "").trim();
+                    int stock = rs.getInt("Stock");
+                    int trigger = rs.getInt("ReOrder Trigger");
+                    String shortNm = nm.length() > 24 ? nm.substring(0, 23) + "…" : nm;
+                    String label = shortNm.isEmpty() ? code : code + " (" + shortNm + ")";
+                    labels.add(label + " — stock " + stock + " / trigger " + trigger);
+                }
+            }
+        }
+        return labels;
+    }
+
+    private static void openViewItemsWithFilters(
+            JPanel workspaceContainer,
+            JFrame frame,
+            User user,
+            Connection connection,
+            String searchText,
+            boolean lowStockOnly
+    ) {
+        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, searchText == null ? "" : searchText);
+        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY, lowStockOnly);
+        try {
+            showView(workspaceContainer, "View Items",
+                    buildInventoryTablePanel(user, connection, frame, workspaceContainer));
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(frame, "Unable to open View Items: " + ex.getMessage(), "View Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static int parseMetadataInt(String raw, int fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
+    }
+
+    private static void restoreWorkspaceLayout(
+            Connection connection,
+            JSplitPane sidebarSplit,
+            JSplitPane adminTripleSplit,
+            JSplitPane photoSplit
+    ) {
+        try {
+            int sidebar = parseMetadataInt(
+                    DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_SIDEBAR_DIVIDER),
+                    SIDEBAR_TARGET_WIDTH);
+            if (sidebarSplit.getWidth() > 0) {
+                sidebarSplit.setDividerLocation(Math.max(160, Math.min(sidebar, sidebarSplit.getWidth() - WORKSPACE_MIN_WIDTH)));
+            } else {
+                sidebarSplit.setDividerLocation(sidebar);
+            }
+            if (adminTripleSplit != null) {
+                int rail = parseMetadataInt(
+                        DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER),
+                        -1);
+                if (rail > 0 && adminTripleSplit.getWidth() > 0) {
+                    adminTripleSplit.setDividerLocation(rail);
+                }
+            }
+            if (photoSplit != null) {
+                int photoDiv = parseMetadataInt(
+                        DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_PHOTO_SPLIT_DIVIDER),
+                        -1);
+                if (photoDiv > 0) {
+                    photoSplit.setDividerLocation(photoDiv);
+                }
+            }
+        } catch (SQLException ignored) {
+            // Keep defaults when metadata cannot be read.
+        }
+    }
+
+    private static void persistWorkspaceLayout(
+            Connection connection,
+            JSplitPane sidebarSplit,
+            JSplitPane adminTripleSplit,
+            JSplitPane photoSplit,
+            String lastViewKey
+    ) {
+        try {
+            if (lastViewKey != null && !lastViewKey.isBlank() && !"home".equals(lastViewKey)) {
+                DatabaseManager.putAppMetadata(connection, DatabaseManager.META_WORKSPACE_LAST_VIEW, lastViewKey);
+            }
+            DatabaseManager.putAppMetadata(connection, DatabaseManager.META_WORKSPACE_SIDEBAR_DIVIDER,
+                    Integer.toString(sidebarSplit.getDividerLocation()));
+            if (adminTripleSplit != null) {
+                DatabaseManager.putAppMetadata(connection, DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER,
+                        Integer.toString(adminTripleSplit.getDividerLocation()));
+            }
+            if (photoSplit != null) {
+                DatabaseManager.putAppMetadata(connection, DatabaseManager.META_WORKSPACE_PHOTO_SPLIT_DIVIDER,
+                        Integer.toString(photoSplit.getDividerLocation()));
+            }
+        } catch (SQLException ignored) {
+            // Best-effort persistence on close.
+        }
+    }
+
+    private static void installDividerPersistence(Connection connection, JSplitPane... splits) {
+        for (JSplitPane split : splits) {
+            if (split == null) {
+                continue;
+            }
+            split.addPropertyChangeListener(JSplitPane.DIVIDER_LOCATION_PROPERTY, evt -> {
+                if (connection == null) {
+                    return;
+                }
+                try {
+                    if (split.getName() != null) {
+                        DatabaseManager.putAppMetadata(connection, split.getName(),
+                                Integer.toString(split.getDividerLocation()));
+                    }
+                } catch (SQLException ignored) {
+                    // Ignore intermittent write failures while dragging.
+                }
+            });
+        }
+    }
+
+    private static void restoreLastWorkspaceView(
+            User user,
+            Connection connection,
+            JFrame frame,
+            JPanel workspaceContainer,
+            AccountActions accountActions
+    ) {
+        try {
+            String last = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_LAST_VIEW);
+            if (last == null || last.isBlank() || "home".equals(last) || "Log Out".equals(last)) {
+                return;
+            }
+            for (NavItem item : getItems(user, connection, accountActions, frame, workspaceContainer)) {
+                if (last.equals(item.label) && item.viewBuilder != null) {
+                    showView(workspaceContainer, item.label, item.viewBuilder.build());
+                    return;
+                }
+            }
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(frame, "Could not restore last view: " + ex.getMessage(),
+                    "Workspace", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private static void installWorkspaceKeyboardShortcuts(
+            JFrame frame,
+            JPanel root,
+            User user,
+            Connection connection,
+            JPanel workspaceContainer,
+            AccountActions accountActions
+    ) {
+        InputMap im = root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap am = root.getActionMap();
+        List<NavItem> items = getItems(user, connection, accountActions, frame, workspaceContainer);
+        int shortcut = 1;
+        for (NavItem item : items) {
+            if (item.viewBuilder == null || shortcut > 9) {
+                continue;
+            }
+            String actionKey = "ims.nav." + shortcut;
+            int keyCode = KeyEvent.VK_0 + shortcut;
+            int mask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+            im.put(KeyStroke.getKeyStroke(keyCode, mask), actionKey);
+            final String label = item.label;
+            am.put(actionKey, new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    try {
+                        showView(workspaceContainer, label, item.viewBuilder.build());
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(frame, "Unable to open " + label + ": " + ex.getMessage(),
+                                "View Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            });
+            shortcut++;
+        }
+    }
+
+    private static void maybeShowBackupReminderDialog(
+            User user,
+            Connection connection,
+            JFrame frame,
+            AccountActions accountActions
+    ) {
+        if (!user.hasAdminRights()) {
+            return;
+        }
+        try {
+            int reminderDays = readBackupReminderDays(connection);
+            int since = accountActions.daysSinceLatestBackup();
+            if (since >= 0 && since <= reminderDays) {
+                return;
+            }
+            String msg = since < 0
+                    ? "No database backups were found under database_backups.\n"
+                    + "Create a backup from Admin tools → Database backup."
+                    : "Your newest backup is " + since + " days old (reminder threshold: " + reminderDays + " days).\n"
+                    + "Consider creating a backup from Admin tools.";
+            JOptionPane.showMessageDialog(frame, msg, "Backup reminder", JOptionPane.WARNING_MESSAGE);
+        } catch (SQLException | IOException ex) {
+            // Skip dialog when reminder status cannot be determined.
+        }
     }
 
     /** One in-progress sale line (quantity and unit price) before checkout. */
@@ -707,6 +1020,8 @@ public final class WorkspaceShell {
 
         java.awt.Component center;
         final JSplitPane[] adminMetricsTripleHolder = new JSplitPane[1];
+        final JSplitPane[] photoSplitHolder = new JSplitPane[1];
+        splitPane.setName(DatabaseManager.META_WORKSPACE_SIDEBAR_DIVIDER);
         if (user.hasAdminRights()) {
             FinancialMetricsStrip metricsStrip = new FinancialMetricsStrip(connection);
             activeMetricsStrip = metricsStrip;
@@ -806,6 +1121,8 @@ public final class WorkspaceShell {
             photoRailSplit.setContinuousLayout(true);
             photoRailSplit.setBorder(null);
             photoRailSplit.setDividerSize(5);
+            photoRailSplit.setName(DatabaseManager.META_WORKSPACE_PHOTO_SPLIT_DIVIDER);
+            photoSplitHolder[0] = photoRailSplit;
             SwingUtilities.invokeLater(() -> photoRailSplit.setDividerLocation(0.66));
 
             photoRailCard.add(photoRailTitle, BorderLayout.NORTH);
@@ -829,6 +1146,7 @@ public final class WorkspaceShell {
             triplePane.setResizeWeight(1.0);
             triplePane.setBorder(null);
             triplePane.setContinuousLayout(true);
+            triplePane.setName(DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER);
             center = triplePane;
             adminMetricsTripleHolder[0] = triplePane;
         } else {
@@ -847,7 +1165,7 @@ public final class WorkspaceShell {
         if (AppUI.usesEmbeddedTitleBar()) {
             northStack.add(AppUI.createApplicationTitleBar("Inventory Management System"));
         }
-        northStack.add(buildSessionTopBar(user));
+        northStack.add(buildSessionTopBar(user, connection, frame, workspaceContainer, accountActions));
         root.add(northStack, BorderLayout.NORTH);
         root.add(center, BorderLayout.CENTER);
 
@@ -856,12 +1174,19 @@ public final class WorkspaceShell {
         profitAlertBannerRefreshAction = profitBanner::refreshFromDatabase;
         scheduleProfitAlertBannerRefresh(connection);
 
+        installDividerPersistence(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0]);
+        installWorkspaceKeyboardShortcuts(frame, root, user, connection, workspaceContainer, accountActions);
+        activeWorkspaceViewKey = "home";
+
         frame.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosed(WindowEvent e) {
+                persistWorkspaceLayout(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0],
+                        activeWorkspaceViewKey);
                 activeMetricsStrip = null;
                 adminMetricsRailHost = null;
                 profitAlertBannerRefreshAction = null;
+                activeWorkspaceViewKey = "home";
                 profitBanner.stopTimer();
                 closeConnectionQuietly(connection);
                 if (whenWindowClosed != null) {
@@ -888,12 +1213,15 @@ public final class WorkspaceShell {
         AppUI.styleWindow(frame);
         refreshActiveMetricsStripNow();
         frame.setVisible(true);
+        maybeShowBackupReminderDialog(user, connection, frame, accountActions);
         SwingUtilities.invokeLater(() -> {
+            restoreWorkspaceLayout(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0]);
             JSplitPane outer = adminMetricsTripleHolder[0];
             if (outer != null) {
                 syncAdminMetricsSplit(outer);
             }
             syncSidebarWorkspaceSplit(splitPane);
+            restoreLastWorkspaceView(user, connection, frame, workspaceContainer, accountActions);
         });
     }
 
@@ -1068,6 +1396,7 @@ public final class WorkspaceShell {
      */
     private static void showView(JPanel workspaceContainer, String key, JPanel panel) {
         AppUI.applyPanelBackground(panel);
+        activeWorkspaceViewKey = key;
         Map<String, Component> cards = workspaceCardRegistry(workspaceContainer);
         Component prior = cards.get(key);
         if (prior != null && prior.getParent() == workspaceContainer) {
@@ -1412,13 +1741,18 @@ public final class WorkspaceShell {
     /** Summary metrics for View Items rail (notes are edited in their own pane). */
     private static String buildItemRailStatsText(Connection connection, String itemCode) throws SQLException {
         int stock = 0;
+        int reorderTrigger = 0;
+        Double marketPrice = null;
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT `Stock` FROM inventory WHERE `Item Code` = ?"
+                "SELECT `Stock`, `ReOrder Trigger`, `Market Price` FROM inventory WHERE `Item Code` = ?"
         )) {
             ps.setString(1, itemCode);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     stock = rs.getInt("Stock");
+                    reorderTrigger = rs.getInt("ReOrder Trigger");
+                    double mp = rs.getDouble("Market Price");
+                    marketPrice = rs.wasNull() ? null : mp;
                 }
             }
         }
@@ -1440,6 +1774,28 @@ public final class WorkspaceShell {
         }
         StringBuilder sb = new StringBuilder();
         sb.append("Current Stock:\n").append(stock).append("\n\n");
+        if (reorderTrigger > 0) {
+            sb.append("Reorder trigger:\n").append(reorderTrigger);
+            if (isLowStockSku(stock, reorderTrigger)) {
+                sb.append("  (low stock)");
+            }
+            sb.append("\n\n");
+        }
+        Double fifoUnitCost = InventoryFifo.weightedAverageFifoUnitCost(connection, itemCode);
+        if (fifoUnitCost != null) {
+            sb.append("Avg FIFO unit cost:\n").append(formatUsdMoney(fifoUnitCost)).append("\n\n");
+        }
+        if (marketPrice != null) {
+            sb.append("Market price:\n").append(formatUsdMoney(marketPrice)).append("\n\n");
+            if (fifoUnitCost != null && fifoUnitCost > 1e-12) {
+                double marginPct = ((marketPrice - fifoUnitCost) / fifoUnitCost) * 100.0;
+                sb.append("Unrealized margin:\n")
+                        .append(String.format(Locale.US, "%.1f%%", marginPct))
+                        .append(" (")
+                        .append(formatUsdMoney(marketPrice - fifoUnitCost))
+                        .append(" per unit)\n\n");
+            }
+        }
         sb.append("Amount Sold:\n").append(soldQty).append("\n\n");
         if (soldQty > 0) {
             double avgPurchase = sumCost / soldQty;
@@ -1818,7 +2174,9 @@ public final class WorkspaceShell {
     }
 
     /** One row in the View Items card shelf (stock or on-order must be &gt; 0). */
-    private record ViewItemShelfRow(String itemCode, int stock, int onOrder, Double marketPrice) {
+    private record ViewItemShelfRow(
+            String itemCode, String itemName, int stock, int onOrder, int reorderTrigger, Double marketPrice
+    ) {
     }
 
     /**
@@ -1842,7 +2200,8 @@ public final class WorkspaceShell {
         JPanel intro = buildSectionPanel();
         intro.add(buildSectionText(
                 "Only items with stock on hand or units on order are listed. "
-                        + "Double-click a card for full item details."));
+                        + "Double-click a card for full item details. "
+                        + "Use ⌘/Ctrl+1–9 for sidebar shortcuts."));
         if (user.hasAdminRights()) {
             intro.add(Box.createVerticalStrut(10));
             JPanel photoActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -1874,10 +2233,113 @@ public final class WorkspaceShell {
         }
         centerWrap.add(intro, BorderLayout.NORTH);
 
+        List<ViewItemShelfRow> allRows = loadViewItemShelfRows(connection);
+        Object prefillSearch = workspaceContainer.getClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT);
+        Object prefillLow = workspaceContainer.getClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY);
+        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, null);
+        workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_LOW_STOCK_ONLY, null);
+
+        JTextField searchField = new JTextField(24);
+        styleInput(searchField);
+        if (prefillSearch instanceof String s) {
+            searchField.setText(s);
+        }
+        JCheckBox lowStockOnly = new JCheckBox("Low stock only");
+        lowStockOnly.setOpaque(false);
+        lowStockOnly.setSelected(Boolean.TRUE.equals(prefillLow));
+
+        JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        AppUI.applyPanelBackground(filterRow);
+        filterRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        filterRow.add(new JLabel("Search code or name"));
+        filterRow.add(searchField);
+        filterRow.add(lowStockOnly);
+        JLabel matchCount = new JLabel(" ");
+        matchCount.setForeground(AppUI.TEXT_MUTED);
+        filterRow.add(matchCount);
+        intro.add(Box.createVerticalStrut(8));
+        intro.add(filterRow);
+
+        JPanel gridHost = new JPanel(new BorderLayout());
+        AppUI.applyPanelBackground(gridHost);
+        final JPanel[] selectedCard = new JPanel[1];
+        final JScrollPane[] scrollHolder = new JScrollPane[1];
+
+        Runnable rebuildGrid = () -> {
+            String q = searchField.getText().trim().toLowerCase(Locale.ROOT);
+            boolean lowOnly = lowStockOnly.isSelected();
+            List<ViewItemShelfRow> filtered = new ArrayList<>();
+            for (ViewItemShelfRow row : allRows) {
+                if (lowOnly && !isLowStockSku(row.stock(), row.reorderTrigger())) {
+                    continue;
+                }
+                if (!q.isEmpty()) {
+                    String code = row.itemCode().toLowerCase(Locale.ROOT);
+                    String name = row.itemName().toLowerCase(Locale.ROOT);
+                    if (!code.contains(q) && !name.contains(q)) {
+                        continue;
+                    }
+                }
+                filtered.add(row);
+            }
+            selectedCard[0] = null;
+            gridHost.removeAll();
+            if (filtered.isEmpty()) {
+                gridHost.add(buildSectionText(
+                        allRows.isEmpty()
+                                ? "No items with stock on hand or on order."
+                                : "No items match the current filter."), BorderLayout.CENTER);
+                matchCount.setText(allRows.isEmpty() ? "" : "0 shown");
+            } else {
+                JPanel scrollBody = new JPanel(new GridBagLayout());
+                scrollBody.setOpaque(true);
+                AppUI.applyPanelBackground(scrollBody);
+                populateViewItemsGrid(scrollBody, user, connection, filtered, selectedCard);
+                JScrollPane scroll = new JScrollPane(scrollBody,
+                        JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                scroll.setBorder(AppUI.newRoundedBorder(8));
+                scroll.getViewport().setBackground(scrollBody.getBackground());
+                scroll.getVerticalScrollBar().setUnitIncrement(16);
+                scroll.setPreferredSize(new Dimension(1080, Math.min(MAIN_FRAME_BASE_H - 260, 520)));
+                gridHost.add(scroll, BorderLayout.CENTER);
+                scrollHolder[0] = scroll;
+                matchCount.setText(filtered.size() + " of " + allRows.size() + " shown");
+            }
+            gridHost.revalidate();
+            gridHost.repaint();
+        };
+
+        DocumentListener filterListener = new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                rebuildGrid.run();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                rebuildGrid.run();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                rebuildGrid.run();
+            }
+        };
+        searchField.getDocument().addDocumentListener(filterListener);
+        lowStockOnly.addActionListener(e -> rebuildGrid.run());
+
+        rebuildGrid.run();
+        centerWrap.add(gridHost, BorderLayout.CENTER);
+        panel.add(centerWrap, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private static List<ViewItemShelfRow> loadViewItemShelfRows(Connection connection) throws SQLException {
         List<ViewItemShelfRow> rows = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
                 """
-                SELECT `Item Code`, `Stock`, `On Order`, `Market Price`
+                SELECT `Item Code`, `Item Name`, `Stock`, `On Order`, `ReOrder Trigger`, `Market Price`
                 FROM inventory
                 WHERE `Stock` > 0 OR `On Order` > 0
                 ORDER BY `Item Code` ASC
@@ -1886,85 +2348,75 @@ public final class WorkspaceShell {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String code = rs.getString("Item Code");
+                    String name = Objects.toString(rs.getString("Item Name"), "");
                     int stock = rs.getInt("Stock");
                     int onOrder = rs.getInt("On Order");
+                    int reorder = rs.getInt("ReOrder Trigger");
                     double mp = rs.getDouble("Market Price");
                     Double market = rs.wasNull() ? null : mp;
-                    rows.add(new ViewItemShelfRow(code, stock, onOrder, market));
+                    rows.add(new ViewItemShelfRow(code, name, stock, onOrder, reorder, market));
                 }
             }
         }
+        return rows;
+    }
 
-        if (rows.isEmpty()) {
-            centerWrap.add(buildSectionText("No items with stock on hand or on order."), BorderLayout.CENTER);
-        } else {
-            JPanel scrollBody = new JPanel(new GridBagLayout());
-            scrollBody.setOpaque(true);
-            AppUI.applyPanelBackground(scrollBody);
+    private static void populateViewItemsGrid(
+            JPanel scrollBody,
+            User user,
+            Connection connection,
+            List<ViewItemShelfRow> rows,
+            JPanel[] selectedCard
+    ) {
+        int n = rows.size();
+        final int cols = VIEW_ITEM_CARD_COLUMNS;
+        int numRows = (n + cols - 1) / cols;
 
-            final JPanel[] selectedCard = new JPanel[1];
-            int n = rows.size();
-            final int cols = VIEW_ITEM_CARD_COLUMNS;
-            int numRows = (n + cols - 1) / cols;
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTH;
+        gbc.weightx = 1.0 / cols;
+        gbc.weighty = 0;
 
-            GridBagConstraints gbc = new GridBagConstraints();
-            gbc.fill = GridBagConstraints.HORIZONTAL;
-            gbc.anchor = GridBagConstraints.NORTH;
-            gbc.weightx = 1.0 / cols;
-            gbc.weighty = 0;
+        for (int r = 0; r < numRows; r++) {
+            gbc.gridy = r;
+            for (int c = 0; c < cols; c++) {
+                int idx = r * cols + c;
+                gbc.gridx = c;
+                gbc.insets = new Insets(r == 0 ? 2 : 10, 6, 0, 6);
 
-            for (int r = 0; r < numRows; r++) {
-                gbc.gridy = r;
-                for (int c = 0; c < cols; c++) {
-                    int idx = r * cols + c;
-                    gbc.gridx = c;
-                    gbc.insets = new Insets(r == 0 ? 2 : 10, 6, 0, 6);
-
-                    JPanel slot = null;
-                    if (idx < n) {
-                        ViewItemShelfRow row = rows.get(idx);
-                        slot = buildViewItemShelfCard(user, connection, row, card -> {
-                            if (selectedCard[0] != null && selectedCard[0] != card) {
-                                styleViewItemShelfCard(selectedCard[0], false);
-                            }
-                            selectedCard[0] = card;
-                            styleViewItemShelfCard(card, true);
-                            notifyAdminItemSelected(row.itemCode());
-                        });
-                    }
-
-                    JPanel cell = new JPanel(new BorderLayout());
-                    cell.setOpaque(false);
-                    if (slot != null) {
-                        cell.add(slot, BorderLayout.CENTER);
-                    }
-                    scrollBody.add(cell, gbc);
+                JPanel slot = null;
+                if (idx < n) {
+                    ViewItemShelfRow row = rows.get(idx);
+                    slot = buildViewItemShelfCard(user, connection, row, card -> {
+                        if (selectedCard[0] != null && selectedCard[0] != card) {
+                            styleViewItemShelfCard(selectedCard[0], false, false);
+                        }
+                        selectedCard[0] = card;
+                        styleViewItemShelfCard(card, true, isLowStockSku(row.stock(), row.reorderTrigger()));
+                        notifyAdminItemSelected(row.itemCode());
+                    });
                 }
+
+                JPanel cell = new JPanel(new BorderLayout());
+                cell.setOpaque(false);
+                if (slot != null) {
+                    cell.add(slot, BorderLayout.CENTER);
+                }
+                scrollBody.add(cell, gbc);
             }
-
-            GridBagConstraints glue = new GridBagConstraints();
-            glue.gridy = numRows;
-            glue.gridx = 0;
-            glue.gridwidth = cols;
-            glue.weighty = 1.0;
-            glue.weightx = 1.0;
-            glue.fill = GridBagConstraints.VERTICAL;
-            JPanel spacer = new JPanel();
-            spacer.setOpaque(false);
-            scrollBody.add(spacer, glue);
-
-            JScrollPane scroll = new JScrollPane(scrollBody,
-                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-            scroll.setBorder(AppUI.newRoundedBorder(8));
-            scroll.getViewport().setBackground(scrollBody.getBackground());
-            scroll.getVerticalScrollBar().setUnitIncrement(16);
-            scroll.setPreferredSize(new Dimension(1080, Math.min(MAIN_FRAME_BASE_H - 220, 560)));
-            centerWrap.add(scroll, BorderLayout.CENTER);
         }
 
-        panel.add(centerWrap, BorderLayout.CENTER);
-        return panel;
+        GridBagConstraints glue = new GridBagConstraints();
+        glue.gridy = numRows;
+        glue.gridx = 0;
+        glue.gridwidth = cols;
+        glue.weighty = 1.0;
+        glue.weightx = 1.0;
+        glue.fill = GridBagConstraints.VERTICAL;
+        JPanel spacer = new JPanel();
+        spacer.setOpaque(false);
+        scrollBody.add(spacer, glue);
     }
 
     /** One View Items card: photo (or placeholder), code, stock, on order, market price. */
@@ -1979,7 +2431,7 @@ public final class WorkspaceShell {
         AppUI.markCardSurface(card);
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
         card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        styleViewItemShelfCard(card, false);
+        styleViewItemShelfCard(card, false, isLowStockSku(row.stock(), row.reorderTrigger()));
 
         JComponent photo = buildViewItemPhotoThumb(row.itemCode(), VIEW_ITEM_CARD_PHOTO_PX);
         photo.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -2021,9 +2473,19 @@ public final class WorkspaceShell {
         return line;
     }
 
-    private static void styleViewItemShelfCard(JPanel card, boolean selected) {
-        Color border = selected ? AppUI.PRIMARY : AppUI.BORDER;
-        int width = selected ? 2 : 1;
+    private static void styleViewItemShelfCard(JPanel card, boolean selected, boolean lowStock) {
+        Color border;
+        int width;
+        if (selected) {
+            border = AppUI.PRIMARY;
+            width = 2;
+        } else if (lowStock) {
+            border = AppUI.DANGER;
+            width = 2;
+        } else {
+            border = AppUI.BORDER;
+            width = 1;
+        }
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, width),
                 BorderFactory.createEmptyBorder(12, 12, 12, 12)));
@@ -5832,14 +6294,19 @@ public final class WorkspaceShell {
         private static final Color PROFIT_BG = new Color(0x0f2419);
         private static final Color PROFIT_FG = AppUI.SUCCESS;
         private static final Color PROFIT_BORDER = new Color(0x059669);
+        private static final Color LOW_STOCK_BG = new Color(0x2a1515);
+        private static final Color LOW_STOCK_FG = AppUI.DANGER;
+        private static final Color LOW_STOCK_BORDER = new Color(0x991b1b);
 
         private final AlertMarqueeStripe setupStripe;
         private final AlertMarqueeStripe profitStripe;
+        private final AlertMarqueeStripe lowStockStripe;
 
         ProfitAlertMarqueeBanner() {
             setLayout(new BorderLayout());
             setupStripe = new AlertMarqueeStripe(SETUP_BG, SETUP_FG, SETUP_BORDER);
             profitStripe = new AlertMarqueeStripe(PROFIT_BG, PROFIT_FG, PROFIT_BORDER);
+            lowStockStripe = new AlertMarqueeStripe(LOW_STOCK_BG, LOW_STOCK_FG, LOW_STOCK_BORDER);
         }
 
         @Override
@@ -5850,43 +6317,63 @@ public final class WorkspaceShell {
         void stopTimer() {
             setupStripe.stopTimer();
             profitStripe.stopTimer();
+            lowStockStripe.stopTimer();
         }
 
         void refreshFromDatabase(Connection connection) {
             setupStripe.stopTimer();
             profitStripe.stopTimer();
+            lowStockStripe.stopTimer();
             removeAll();
-            setLayout(new BorderLayout());
+            JPanel stack = new JPanel();
+            stack.setLayout(new BoxLayout(stack, BoxLayout.Y_AXIS));
+            stack.setOpaque(false);
+            boolean any = false;
             try {
-                if ("1".equals(DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_BANNER_DISABLED))) {
+                List<String> lowLabels = lowStockItemLabels(connection);
+                if (!lowLabels.isEmpty()) {
+                    stack.add(lowStockStripe);
+                    lowStockStripe.prepareMarquee("Low stock — reorder soon: "
+                            + profitAlertItemListPhrase(lowLabels));
+                    lowStockStripe.startTimerIfShowing();
+                    any = true;
+                }
+
+                boolean profitHidden = "1".equals(
+                        DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_BANNER_DISABLED));
+                if (!profitHidden) {
+                    String goalRaw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_GOAL_PCT);
+                    int profitGoal = -1;
+                    if (goalRaw != null && !goalRaw.isBlank()) {
+                        try {
+                            profitGoal = Integer.parseInt(goalRaw.trim());
+                        } catch (NumberFormatException ex) {
+                            profitGoal = -1;
+                        }
+                    }
+                    boolean profitOk = profitGoal >= 0 && profitGoal <= 10_000_000;
+                    if (!profitOk) {
+                        stack.add(setupStripe);
+                        setupStripe.prepareMarquee(PROFIT_ALERT_BANNER_SETUP_MESSAGE);
+                        setupStripe.startTimerIfShowing();
+                    } else {
+                        List<String> plabels = profitAlertQualifyingItemLabels(connection, profitGoal);
+                        String profitMsg = "Goal of " + profitGoal + "% profit on the following items: "
+                                + profitAlertItemListPhrase(plabels);
+                        stack.add(profitStripe);
+                        profitStripe.prepareMarquee(profitMsg);
+                        profitStripe.startTimerIfShowing();
+                    }
+                    any = true;
+                }
+
+                if (!any) {
                     setVisible(false);
                     revalidate();
                     repaint();
                     return;
                 }
-                String goalRaw = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_PROFIT_ALERT_GOAL_PCT);
-                int profitGoal = -1;
-                if (goalRaw != null && !goalRaw.isBlank()) {
-                    try {
-                        profitGoal = Integer.parseInt(goalRaw.trim());
-                    } catch (NumberFormatException ex) {
-                        profitGoal = -1;
-                    }
-                }
-                boolean profitOk = profitGoal >= 0 && profitGoal <= 10_000_000;
-
-                if (!profitOk) {
-                    add(setupStripe, BorderLayout.CENTER);
-                    setupStripe.prepareMarquee(PROFIT_ALERT_BANNER_SETUP_MESSAGE);
-                    setupStripe.startTimerIfShowing();
-                } else {
-                    List<String> plabels = profitAlertQualifyingItemLabels(connection, profitGoal);
-                    String profitMsg = "Goal of " + profitGoal + "% profit on the following items: "
-                            + profitAlertItemListPhrase(plabels);
-                    add(profitStripe, BorderLayout.CENTER);
-                    profitStripe.prepareMarquee(profitMsg);
-                    profitStripe.startTimerIfShowing();
-                }
+                add(stack, BorderLayout.CENTER);
                 setVisible(true);
                 revalidate();
                 repaint();
@@ -5894,7 +6381,7 @@ public final class WorkspaceShell {
                 removeAll();
                 setLayout(new BorderLayout());
                 add(setupStripe, BorderLayout.CENTER);
-                setupStripe.prepareMarquee("Profit alert: could not load data.");
+                setupStripe.prepareMarquee("Workspace alerts: could not load data.");
                 setupStripe.startTimerIfShowing();
                 setVisible(true);
                 revalidate();
@@ -6034,12 +6521,14 @@ public final class WorkspaceShell {
         gb.insets = new Insets(4, 0, 4, 10);
 
         JComboBox<String> reportType = user.hasAdminRights()
-                ? new JComboBox<>(new String[]{"Sales", "Users", "Movements"})
+                ? new JComboBox<>(new String[]{"Sales", "Users", "Movements", "Dead stock", "Item margins"})
                 : new JComboBox<>(new String[]{"Sales"});
         JTextField search = new JTextField();
         JTextField fromDate = new JTextField();
         JTextField toDate = new JTextField();
+        JTextField inactiveDays = new JTextField("90", 5);
         styleInput(search, fromDate, toDate);
+        styleInputCompact(inactiveDays);
         styleComboMatchInputRow(reportType);
 
         fromDate.setText(LocalDate.now().minusDays(30).toString());
@@ -6097,6 +6586,32 @@ public final class WorkspaceShell {
         gb.weightx = 1;
         filterForm.add(toDate, gb);
 
+        JLabel inactiveLabel = new JLabel("Inactive days (dead stock)");
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        filterForm.add(inactiveLabel, gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        filterForm.add(inactiveDays, gb);
+
+        Runnable syncReportFieldState = () -> {
+            String selected = (String) reportType.getSelectedItem();
+            boolean deadStock = "Dead stock".equals(selected);
+            boolean margins = "Item margins".equals(selected);
+            inactiveLabel.setEnabled(deadStock);
+            inactiveDays.setEnabled(deadStock);
+            fromDate.setEnabled(!margins);
+            toDate.setEnabled(!margins);
+        };
+        reportType.addActionListener(e -> syncReportFieldState.run());
+        syncReportFieldState.run();
+
         JPanel headingFilter = new JPanel(new BorderLayout(0, 10));
         AppUI.applyPanelBackground(headingFilter);
         headingFilter.add(buildSectionTitle("Generate Reports"), BorderLayout.NORTH);
@@ -6115,10 +6630,19 @@ public final class WorkspaceShell {
         JScrollPane usersScroll = new JScrollPane(usersTable);
         usersScroll.setBorder(AppUI.newRoundedBorder(8));
 
+        DefaultTableModel analyticsTableModel = new DefaultTableModel(new String[]{
+                "Item Code", "Item Name", "Stock", "Detail A", "Detail B", "Detail C"
+        }, 0);
+        JTable analyticsTable = new JTable(analyticsTableModel);
+        installTableCopyMenu(analyticsTable);
+        JScrollPane analyticsScroll = new JScrollPane(analyticsTable);
+        analyticsScroll.setBorder(AppUI.newRoundedBorder(8));
+
         JPanel contentCards = new JPanel(new CardLayout());
         AppUI.applyPanelBackground(contentCards);
         contentCards.add(salesScroll, "Sales");
         contentCards.add(usersScroll, "Users");
+        contentCards.add(analyticsScroll, "Analytics");
 
         final ReportData[] latestReport = new ReportData[1];
         final String[] latestReportType = new String[]{"Sales"};
@@ -6133,7 +6657,48 @@ public final class WorkspaceShell {
         generate.addActionListener(e -> {
             LocalDate from;
             LocalDate to;
+            String selected = (String) reportType.getSelectedItem();
             try {
+                if ("Item margins".equals(selected)) {
+                    try {
+                        ReportData marginData = buildItemMarginsReportData(connection, search.getText().trim());
+                        populateReportTable(analyticsTableModel, marginData);
+                        ((CardLayout) contentCards.getLayout()).show(contentCards, "Analytics");
+                        latestReport[0] = marginData;
+                        latestReportType[0] = "item_margins";
+                        deferPackTableColumns(analyticsTable);
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(reportsPanel,
+                                "Database error while building report: " + ex.getMessage(),
+                                "Report Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                    return;
+                }
+                if ("Dead stock".equals(selected)) {
+                    int idleDays;
+                    try {
+                        idleDays = Integer.parseInt(inactiveDays.getText().trim());
+                        if (idleDays < 1 || idleDays > 3650) {
+                            throw new NumberFormatException();
+                        }
+                    } catch (NumberFormatException ex) {
+                        JOptionPane.showMessageDialog(reportsPanel, "Enter inactive days between 1 and 3650.");
+                        return;
+                    }
+                    try {
+                        ReportData deadData = buildDeadStockReportData(connection, search.getText().trim(), idleDays);
+                        populateReportTable(analyticsTableModel, deadData);
+                        ((CardLayout) contentCards.getLayout()).show(contentCards, "Analytics");
+                        latestReport[0] = deadData;
+                        latestReportType[0] = "dead_stock";
+                        deferPackTableColumns(analyticsTable);
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(reportsPanel,
+                                "Database error while building report: " + ex.getMessage(),
+                                "Report Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                    return;
+                }
                 from = LocalDate.parse(fromDate.getText().trim());
                 to = LocalDate.parse(toDate.getText().trim());
             } catch (DateTimeParseException ex) {
@@ -6145,7 +6710,6 @@ public final class WorkspaceShell {
                 return;
             }
             try {
-                String selected = (String) reportType.getSelectedItem();
                 CardLayout cardLayout = (CardLayout) contentCards.getLayout();
                 if ("Users".equals(selected)) {
                     ReportData userData = buildUsersReportData(connection, search.getText().trim(), from, to);
@@ -6283,6 +6847,41 @@ public final class WorkspaceShell {
         JLabel blurb = buildSectionText("Backups live under database_backups. Restoring replaces the live database — restart the app afterward.");
         blurb.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(blurb);
+        content.add(Box.createVerticalStrut(8));
+
+        JTextField reminderDaysField = new JTextField(5);
+        styleInputCompact(reminderDaysField);
+        try {
+            reminderDaysField.setText(Integer.toString(readBackupReminderDays(connection)));
+        } catch (SQLException ex) {
+            reminderDaysField.setText(Integer.toString(DEFAULT_BACKUP_REMINDER_DAYS));
+        }
+        JButton saveReminderDays = new JButton("Save reminder");
+        styleSecondaryButton(saveReminderDays);
+        saveReminderDays.addActionListener(e -> {
+            try {
+                int days = Integer.parseInt(reminderDaysField.getText().trim());
+                if (days < 1 || days > 365) {
+                    JOptionPane.showMessageDialog(frame, "Enter reminder days between 1 and 365.");
+                    return;
+                }
+                DatabaseManager.putAppMetadata(connection, DatabaseManager.META_BACKUP_REMINDER_DAYS,
+                        Integer.toString(days));
+                JOptionPane.showMessageDialog(frame, "Backup reminder saved.", "Backup",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(frame, "Enter a whole number of days.");
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(frame, "Could not save reminder: " + ex.getMessage());
+            }
+        });
+        JPanel reminderRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        AppUI.applyPanelBackground(reminderRow);
+        reminderRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reminderRow.add(new JLabel("Remind if no backup within (days):"));
+        reminderRow.add(reminderDaysField);
+        reminderRow.add(saveReminderDays);
+        content.add(reminderRow);
         content.add(Box.createVerticalStrut(8));
 
         DefaultTableModel tableModel = new DefaultTableModel(new Object[]{"Backup folder"}, 0) {
@@ -6443,6 +7042,114 @@ public final class WorkspaceShell {
         content.setAlignmentX(Component.LEFT_ALIGNMENT);
         refreshBackups.run();
         return content;
+    }
+
+    private static ReportData buildDeadStockReportData(Connection connection, String search, int inactiveDays)
+            throws SQLException {
+        ReportData data = new ReportData("Dead Stock Report");
+        String like = "%" + search + "%";
+        String sql = """
+                SELECT i.`Item Code` AS code,
+                       i.`Item Name` AS iname,
+                       i.`Stock` AS stock,
+                       MAX(s.`DateISO`) AS last_sale,
+                       CASE
+                           WHEN MAX(s.`DateISO`) IS NULL THEN -1
+                           ELSE CAST(julianday('now') - julianday(MAX(s.`DateISO`)) AS INTEGER)
+                       END AS days_idle
+                FROM inventory i
+                LEFT JOIN sales s ON s.`Item Code` = i.`Item Code`
+                WHERE i.`Stock` > 0
+                  AND (? = '' OR lower(i.`Item Code`) LIKE lower(?) OR lower(i.`Item Name`) LIKE lower(?))
+                GROUP BY i.`Item Code`, i.`Item Name`, i.`Stock`
+                HAVING last_sale IS NULL OR days_idle >= ?
+                ORDER BY days_idle DESC, code ASC
+                """;
+        int rowCount = 0;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, search);
+            ps.setString(2, like);
+            ps.setString(3, like);
+            ps.setInt(4, inactiveDays);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rowCount++;
+                    String lastSale = rs.getString("last_sale");
+                    int daysIdle = rs.getInt("days_idle");
+                    data.rows.add(new Object[]{
+                            rs.getString("code"),
+                            rs.getString("iname"),
+                            rs.getInt("stock"),
+                            lastSale == null ? "—" : lastSale,
+                            daysIdle < 0 ? "Never sold" : Integer.toString(daysIdle),
+                            "≥ " + inactiveDays + "d idle"
+                    });
+                }
+            }
+        }
+        data.columns = new String[]{
+                "Item Code", "Item Name", "Stock", "Last Sale", "Days Idle", "Threshold"
+        };
+        data.summary.put("Rows", String.valueOf(rowCount));
+        data.summary.put("Inactive threshold (days)", String.valueOf(inactiveDays));
+        data.summary.put("Includes never-sold SKUs", "Yes");
+        return data;
+    }
+
+    private static ReportData buildItemMarginsReportData(Connection connection, String search) throws SQLException {
+        ReportData data = new ReportData("Item Margins Report");
+        String like = "%" + search + "%";
+        String sql = """
+                SELECT i.`Item Code` AS code,
+                       i.`Item Name` AS iname,
+                       i.`Stock` AS stock,
+                       CAST(i.`Market Price` AS REAL) AS mp,
+                       (CAST(layer_tot.w AS REAL) / layer_tot.r) AS avgcost
+                FROM inventory i
+                INNER JOIN (
+                    SELECT item_code AS icode,
+                           SUM(CAST(qty_remaining AS REAL) * unit_cost) AS w,
+                           SUM(qty_remaining) AS r
+                    FROM inventory_cost_layers
+                    WHERE qty_remaining > 0
+                    GROUP BY item_code
+                ) layer_tot ON layer_tot.icode = i.`Item Code`
+                WHERE i.`Stock` > 0
+                  AND i.`Market Price` IS NOT NULL
+                  AND layer_tot.r > 0
+                  AND (CAST(layer_tot.w AS REAL) / layer_tot.r) > 1e-12
+                  AND (? = '' OR lower(i.`Item Code`) LIKE lower(?) OR lower(i.`Item Name`) LIKE lower(?))
+                ORDER BY ((mp - avgcost) / avgcost) DESC, code ASC
+                """;
+        int rowCount = 0;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, search);
+            ps.setString(2, like);
+            ps.setString(3, like);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rowCount++;
+                    double mp = rs.getDouble("mp");
+                    double avg = rs.getDouble("avgcost");
+                    double marginPct = ((mp - avg) / avg) * 100.0;
+                    data.rows.add(new Object[]{
+                            rs.getString("code"),
+                            rs.getString("iname"),
+                            rs.getInt("stock"),
+                            formatUsdMoney(avg),
+                            formatUsdMoney(mp),
+                            String.format(Locale.US, "%.1f%%", marginPct),
+                            formatUsdMoney(mp - avg)
+                    });
+                }
+            }
+        }
+        data.columns = new String[]{
+                "Item Code", "Item Name", "Stock", "Avg FIFO Cost", "Market Price", "Margin %", "Margin / Unit"
+        };
+        data.summary.put("Rows", String.valueOf(rowCount));
+        data.summary.put("Basis", "Market price vs weighted-average FIFO unit cost on remaining stock");
+        return data;
     }
 
     /**

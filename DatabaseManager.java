@@ -23,6 +23,16 @@ public final class DatabaseManager {
     public static final String META_PROFIT_ALERT_GOAL_PCT = "profit_alert_goal_pct";
     /** {@code app_metadata} key: {@code "1"} hides the workspace profit-alert marquee for all users. */
     public static final String META_PROFIT_ALERT_BANNER_DISABLED = "profit_alert_banner_disabled";
+    /** {@code app_metadata} key: last opened sidebar view label (e.g. {@code View Items}). */
+    public static final String META_WORKSPACE_LAST_VIEW = "workspace_last_view";
+    /** {@code app_metadata} key: sidebar | workspace divider location in pixels. */
+    public static final String META_WORKSPACE_SIDEBAR_DIVIDER = "workspace_sidebar_divider";
+    /** {@code app_metadata} key: main | admin-rail divider location in pixels. */
+    public static final String META_WORKSPACE_ADMIN_RAIL_DIVIDER = "workspace_admin_rail_divider";
+    /** {@code app_metadata} key: photo rail vertical split divider location in pixels. */
+    public static final String META_WORKSPACE_PHOTO_SPLIT_DIVIDER = "workspace_photo_split_divider";
+    /** {@code app_metadata} key: warn admins when no backup within this many days (default {@code 7}). */
+    public static final String META_BACKUP_REMINDER_DAYS = "backup_reminder_days";
 
     /** {@code true} when per-location qty table exists (enterprise schema initialized). */
     public static boolean hasInventoryStorageQtyTable(Connection connection) throws SQLException {

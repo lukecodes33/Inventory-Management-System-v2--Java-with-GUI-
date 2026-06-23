@@ -371,6 +371,37 @@ public final class InventoryFifo {
         }
     }
 
+    /**
+     * Weighted-average FIFO unit cost for remaining on-hand layers of one SKU.
+     *
+     * @return average unit cost, or {@code null} when no positive remaining quantity
+     */
+    public static Double weightedAverageFifoUnitCost(Connection connection, String itemCode) throws SQLException {
+        if (itemCode == null || itemCode.isBlank()) {
+            return null;
+        }
+        String sql = """
+                SELECT SUM(CAST(qty_remaining AS REAL) * unit_cost) AS w,
+                       SUM(qty_remaining) AS r
+                FROM inventory_cost_layers
+                WHERE item_code = ? AND qty_remaining > 0
+                """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, itemCode.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                double w = rs.getDouble("w");
+                double r = rs.getDouble("r");
+                if (rs.wasNull() || r <= 1e-12) {
+                    return null;
+                }
+                return w / r;
+            }
+        }
+    }
+
     /** One SKU line ranked by unrealized gain vs weighted-average FIFO unit cost and market price. */
     public static final class UnrealizedGainRow {
         public final String itemCode;
