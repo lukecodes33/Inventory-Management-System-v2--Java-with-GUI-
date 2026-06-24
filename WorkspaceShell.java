@@ -57,6 +57,8 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.KeyEvent;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseEvent;
@@ -120,12 +122,14 @@ import javax.imageio.ImageIO;
  * descriptive names aligned with sidebar labels {@code (“buildXxxPanel”)}, reserving block comments where behavior is subtle.</p>
  */
 public final class WorkspaceShell {
-    private static final int INPUT_HEIGHT = 34;
+    private static final int INPUT_HEIGHT = AppUI.CONTROL_HEIGHT;
     /** Add Item row field height (~20% above prior compact height); horizontal size uses preferred width. */
-    private static final int ADD_ITEM_INPUT_HEIGHT = 37;
+    private static final int ADD_ITEM_INPUT_HEIGHT = 38;
     /** Preferred side length for staged JPEG preview on Add Item (square). */
     private static final int ADD_ITEM_PHOTO_PREVIEW_MAX = 300;
-    private static final int TABLE_ROW_HEIGHT = 28;
+    private static final int TABLE_ROW_HEIGHT = 32;
+    private static final int FORM_LABEL_MIN_WIDTH = 148;
+    private static final Insets FORM_GRID_INSETS = new Insets(6, 0, 6, 14);
     /** Max characters stored on {@code movements.Reason} for purchase-order cancellations. */
     private static final int PO_CANCEL_REASON_MAX_CHARS = 500;
     private static final int ITEM_DESC_COLUMN_MIN_WIDTH = 80;
@@ -144,7 +148,7 @@ public final class WorkspaceShell {
     private static final int MAIN_FRAME_HEIGHT_SCALE_PERCENT = 125;
     /** Multiplies default width after height-scale (e.g. 1.25 → 25% wider than the height-scaled width). */
     private static final double MAIN_FRAME_WIDTH_EXTRA_FACTOR = 1.25;
-    private static final int SIDEBAR_TARGET_WIDTH = 280;
+    private static final int SIDEBAR_TARGET_WIDTH = 300;
     private static final int WORKSPACE_MIN_WIDTH = 360;
     /** Metrics / photo rail width (admin layout); fits {@link #ITEM_PHOTO_DISPLAY_MAX_W} plus padding. */
     private static final int ADMIN_METRICS_RAIL_OUTER_PX = 448;
@@ -1186,7 +1190,7 @@ public final class WorkspaceShell {
             photoRailImage.setHorizontalAlignment(SwingConstants.CENTER);
             photoRailImage.setForeground(AppUI.TEXT_MUTED);
             JScrollPane photoRailScroll = new JScrollPane(photoRailImage);
-            photoRailScroll.setBorder(AppUI.newRoundedBorder(8));
+            photoRailScroll.setBorder(AppUI.lineBorder());
             photoRailScroll.getVerticalScrollBar().setUnitIncrement(16);
             photoRailScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
             photoRailScroll.setPreferredSize(new Dimension(ITEM_PHOTO_DISPLAY_MAX_W + 16, ITEM_PHOTO_DISPLAY_MAX_H + 16));
@@ -1198,9 +1202,10 @@ public final class WorkspaceShell {
             photoRailStats.setWrapStyleWord(true);
             photoRailStats.setRows(8);
             photoRailStats.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
-            photoRailStats.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+            photoRailStats.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+            photoRailStats.setForeground(AppUI.TEXT);
             JScrollPane photoRailStatsScroll = new JScrollPane(photoRailStats);
-            photoRailStatsScroll.setBorder(AppUI.newRoundedBorder(8));
+            photoRailStatsScroll.setBorder(AppUI.lineBorder());
             photoRailStatsScroll.getVerticalScrollBar().setUnitIncrement(16);
 
             JTextArea photoRailNotes = new JTextArea(4, 18);
@@ -1208,8 +1213,10 @@ public final class WorkspaceShell {
             photoRailNotes.setWrapStyleWord(true);
             photoRailNotes.setToolTipText("Inventory note (max " + ITEM_NOTES_MAX_CHARS + " characters).");
             photoRailNotes.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+            photoRailNotes.setFont(photoRailNotes.getFont().deriveFont(Font.PLAIN, 13f));
+            photoRailNotes.setForeground(AppUI.TEXT);
             JScrollPane photoRailNotesScroll = new JScrollPane(photoRailNotes);
-            photoRailNotesScroll.setBorder(AppUI.newRoundedBorder(8));
+            photoRailNotesScroll.setBorder(AppUI.lineBorder());
             photoRailNotesScroll.getVerticalScrollBar().setUnitIncrement(16);
 
             JLabel photoRailNotesHeading = new JLabel("Notes");
@@ -1418,9 +1425,8 @@ public final class WorkspaceShell {
         for (NavItem item : getItems(user, connection, accountActions, frame, workspaceContainer)) {
             JButton button = new JButton(item.label);
             button.setAlignmentX(Component.LEFT_ALIGNMENT);
-            button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+            button.setMaximumSize(new Dimension(Integer.MAX_VALUE, AppUI.CONTROL_HEIGHT + 6));
             button.setHorizontalAlignment(SwingConstants.LEFT);
-            button.setBorder(AppUI.newRoundedBorder(8));
             button.setFocusPainted(false);
             button.setOpaque(true);
             button.setContentAreaFilled(true);
@@ -1493,7 +1499,7 @@ public final class WorkspaceShell {
                 recentButton.setToolTipText("Open View Items filtered by " + entry.itemCode());
                 recentButton.setAlignmentX(Component.LEFT_ALIGNMENT);
                 recentButton.setHorizontalAlignment(SwingConstants.LEFT);
-                recentButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+                recentButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, AppUI.CONTROL_HEIGHT + 4));
                 styleSecondaryButton(recentButton);
                 recentButton.addActionListener(e -> {
                     workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, entry.itemCode());
@@ -1580,8 +1586,7 @@ public final class WorkspaceShell {
         items.add(new NavItem("View Sales Transaction", () -> buildSalesPanel(user, connection, workspaceContainer)));
         if (admin) {
             items.add(new NavItem("Write Off Stock", () -> buildWriteOffPanel(user, connection)));
-            items.add(new NavItem("Market Prices", () -> buildMarketPricesBulkPanel(user, connection, workspaceContainer)));
-            items.add(new NavItem("Change Reorder Triggers", () -> buildAdjustReorderPanel(user, connection, workspaceContainer)));
+            items.add(new NavItem("Pricing & Reorder", () -> buildPricingAndReorderPanel(user, connection, workspaceContainer)));
             items.add(new NavItem("Low Stock Check", () -> buildLowStockPanel(connection)));
             items.add(new NavItem("Generate Reports", () -> buildReportsPanel(user, connection)));
             items.add(new NavItem(VIEW_ADMIN_TOOLS, () -> buildAdministrationToolsPanel(user, connection, frame, accountActions)));
@@ -1648,16 +1653,12 @@ public final class WorkspaceShell {
 
     /** Default (unselected) sidebar navigation button styling. */
     private static void applyNavButtonDefaultStyle(JButton button) {
-        button.setBackground(SIDEBAR_NAV_DEFAULT_BG);
-        button.setForeground(SIDEBAR_NAV_DEFAULT_FG);
-        button.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.styleNavButton(button, false);
     }
 
     /** Highlights the active sidebar workspace card tab. */
     private static void applyNavButtonSelectedStyle(JButton button) {
-        button.setBackground(SIDEBAR_NAV_SELECTED_BG);
-        button.setForeground(SIDEBAR_NAV_SELECTED_FG);
-        button.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.styleNavButton(button, true);
     }
 
     /**
@@ -2314,11 +2315,25 @@ public final class WorkspaceShell {
 
     /** Appends label/value pair rows to the item detail dialog grid. */
     private static void addDetailFieldRow(JPanel grid, String label, String value) {
-        JLabel l = new JLabel(label);
+        int row = grid.getComponentCount() / 2;
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 0, 5, 14);
+        gbc.gridy = row;
+        gbc.gridx = 0;
+        gbc.anchor = GridBagConstraints.LINE_END;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        JLabel l = new JLabel(label, SwingConstants.RIGHT);
         l.setFont(l.getFont().deriveFont(Font.BOLD));
+        l.setForeground(AppUI.TEXT_MUTED);
+        l.setMinimumSize(new Dimension(FORM_LABEL_MIN_WIDTH, 22));
+        grid.add(l, gbc);
+        gbc.gridx = 1;
+        gbc.anchor = GridBagConstraints.LINE_START;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         JLabel v = new JLabel(value == null ? "" : value);
-        grid.add(l);
-        grid.add(v);
+        grid.add(v, gbc);
     }
 
     /** Modal item summary with optional JPEG; admins can replace the photo. */
@@ -2378,7 +2393,7 @@ public final class WorkspaceShell {
         photoLabel.setVerticalAlignment(SwingConstants.CENTER);
         photoLabel.setForeground(AppUI.TEXT_MUTED);
 
-        JPanel fields = new JPanel(new GridLayout(0, 2, 10, 8));
+        JPanel fields = new JPanel(new GridBagLayout());
         AppUI.applyPanelBackground(fields);
         addDetailFieldRow(fields, "Item code:", itemCode);
         addDetailFieldRow(fields, "Item name:", itemName == null ? "" : itemName);
@@ -2532,21 +2547,31 @@ public final class WorkspaceShell {
         JComboBox<String> smartFilter = new JComboBox<>(VIEW_ITEMS_FILTER_OPTIONS);
         styleComboMatchInputRow(smartFilter);
 
-        JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        AppUI.applyPanelBackground(filterRow);
-        filterRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        filterRow.add(new JLabel("Search code or name"));
-        filterRow.add(searchField);
-        filterRow.add(new JLabel("Filter"));
-        filterRow.add(smartFilter);
         final List<ViewItemShelfRow>[] filteredRowsHolder = new List[]{new ArrayList<>()};
         JButton exportCsv = new JButton("Export CSV");
         styleSecondaryButton(exportCsv);
         exportCsv.addActionListener(e -> exportViewItemsCsv(frame, filteredRowsHolder[0]));
-        filterRow.add(exportCsv);
         JLabel matchCount = new JLabel(" ");
         matchCount.setForeground(AppUI.TEXT_MUTED);
-        filterRow.add(matchCount);
+
+        JPanel filterRow = new JPanel();
+        filterRow.setLayout(new BoxLayout(filterRow, BoxLayout.Y_AXIS));
+        AppUI.applyPanelBackground(filterRow);
+        filterRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel searchRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        AppUI.applyPanelBackground(searchRow);
+        searchRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        searchRow.add(new JLabel("Search code or name"));
+        searchRow.add(searchField);
+        JPanel filterSelectRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        AppUI.applyPanelBackground(filterSelectRow);
+        filterSelectRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        filterSelectRow.add(new JLabel("Filter"));
+        filterSelectRow.add(smartFilter);
+        filterSelectRow.add(exportCsv);
+        filterSelectRow.add(matchCount);
+        filterRow.add(searchRow);
+        filterRow.add(filterSelectRow);
         intro.add(Box.createVerticalStrut(8));
         intro.add(filterRow);
 
@@ -3623,7 +3648,7 @@ public final class WorkspaceShell {
         if (includeBottomRowFilterFields) {
             for (int i = 0; i < columns.length; i++) {
                 JTextField filter = new JTextField();
-                filter.setBorder(AppUI.newRoundedBorder(8));
+                styleInput(filter);
                 bottomFilters[i] = filter;
                 filter.addCaretListener(e -> applyCombinedRowFilter.run());
                 filterPanel.add(filter);
@@ -4977,12 +5002,16 @@ public final class WorkspaceShell {
         });
         JScrollPane pendingScroll = new JScrollPane(pendingTable);
         pendingScroll.setBorder(AppUI.newRoundedBorder(8));
-        JPanel searchPanel = new JPanel(new GridLayout(1, 2, 8, 8));
+        JPanel searchPanel = new JPanel(new BorderLayout(0, 6));
         AppUI.applyPanelBackground(searchPanel);
+        searchPanel.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
+        JLabel searchLabel = new JLabel("Search pending orders (code, description, supplier, or reference)");
+        searchLabel.setForeground(AppUI.TEXT_MUTED);
+        searchLabel.setFont(searchLabel.getFont().deriveFont(Font.PLAIN, 13f));
         JTextField pendingSearch = new JTextField();
-        pendingSearch.setBorder(AppUI.newRoundedBorder(8));
-        searchPanel.add(new JLabel("Search pending (item code / description / purchased from / reference)"));
-        searchPanel.add(pendingSearch);
+        styleInput(pendingSearch);
+        searchPanel.add(searchLabel, BorderLayout.NORTH);
+        searchPanel.add(pendingSearch, BorderLayout.CENTER);
         pendingSearch.getDocument().addDocumentListener(new DocumentListener() {
             private void applyFilter() {
                 String text = pendingSearch.getText();
@@ -5095,33 +5124,17 @@ public final class WorkspaceShell {
         return panel;
     }
 
-    /** Same grid cell pattern as market prices: item code + wrapped name · compact reorder field. */
-    private static JPanel buildReorderTriggerItemSlot(String code, String name, JTextField triggerField) {
-        JPanel outer = new JPanel(new BorderLayout(8, 0));
-        outer.setOpaque(false);
-
-        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        east.setOpaque(false);
-        styleInput(triggerField);
-        triggerField.setHorizontalAlignment(JTextField.TRAILING);
-        attachAdaptiveBoundedFieldWidth(triggerField, INPUT_HEIGHT, 52, 100);
-
-        outer.add(bulkEditSkuMetaPanel(code, name), BorderLayout.CENTER);
-        outer.add(east, BorderLayout.EAST);
-        east.add(triggerField);
-
-        outer.setMinimumSize(new Dimension(100, INPUT_HEIGHT + 4));
-        return outer;
-    }
-
     /** Bold SKU code with a wrapping name region so labels are not abbreviated to tiny fragments. */
-    private static JPanel bulkEditSkuMetaPanel(String code, String name) {
-        JPanel meta = new JPanel(new BorderLayout(0, 2));
-        meta.setOpaque(false);
+    private static final int BULK_EDIT_META_VGAP = 2;
+
+    private static JLabel bulkEditSkuCodeLabel(String code) {
         JLabel jc = new JLabel(code);
         jc.setFont(jc.getFont().deriveFont(Font.BOLD, 12f));
         jc.setOpaque(false);
+        return jc;
+    }
 
+    private static JTextArea bulkEditSkuNameArea(String name) {
         String safeName = Objects.toString(name, "");
         JTextArea nameArea = new JTextArea(safeName);
         nameArea.setEditable(false);
@@ -5133,206 +5146,7 @@ public final class WorkspaceShell {
         nameArea.setFont(nameArea.getFont().deriveFont(Font.PLAIN, 11f));
         nameArea.setForeground(AppUI.TEXT_MUTED);
         nameArea.setBorder(BorderFactory.createEmptyBorder());
-
-        meta.add(jc, BorderLayout.NORTH);
-        meta.add(nameArea, BorderLayout.CENTER);
-        return meta;
-    }
-
-    /**
-     * Bulk-edit {@code Inventory.ReOrder Trigger} for every SKU (same layout as Market Prices).
-     * Submit applies updates only where the typed value differs from the loaded value.
-     */
-    private static JPanel buildAdjustReorderPanel(User user, Connection connection, JPanel workspaceContainer) throws SQLException {
-        ensureAdmin(user, "Adjust Reorder Trigger");
-        JPanel panel = buildFormPanel("Change reorder triggers");
-        JPanel centerWrap = new JPanel(new BorderLayout(0, 12));
-        AppUI.applyPanelBackground(centerWrap);
-
-        JPanel intro = buildSectionPanel();
-        intro.add(buildSectionText(
-                "Each line shows the saved reorder threshold. Change any value and submit — only rows you actually edit "
-                        + "are written to the database; SKUs left at their original numbers are skipped."));
-        centerWrap.add(intro, BorderLayout.NORTH);
-
-        LinkedHashMap<String, Integer> originalTriggers = new LinkedHashMap<>();
-        LinkedHashMap<String, JTextField> codeToTriggerField = new LinkedHashMap<>();
-        List<String> codesOrdered = new ArrayList<>();
-        List<String> namesOrdered = new ArrayList<>();
-
-        boolean anyRows = false;
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT `Item Code`, `Item Name`, `ReOrder Trigger` FROM inventory ORDER BY `Item Code` ASC"
-        )) {
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    anyRows = true;
-                    String code = rs.getString("Item Code");
-                    String nm = Objects.toString(rs.getString("Item Name"), "");
-                    int trigger = rs.getInt("ReOrder Trigger");
-                    originalTriggers.put(code, trigger);
-
-                    JTextField triggerField = new JTextField(Integer.toString(trigger), 8);
-                    codeToTriggerField.put(code, triggerField);
-                    codesOrdered.add(code);
-                    namesOrdered.add(nm);
-                }
-            }
-        }
-
-        if (!anyRows) {
-            centerWrap.add(buildSectionText("No inventory rows found."), BorderLayout.CENTER);
-        } else {
-            JPanel scrollBody = new JPanel(new GridBagLayout());
-            scrollBody.setOpaque(true);
-            AppUI.applyPanelBackground(scrollBody);
-
-            int n = codesOrdered.size();
-            final int cols = 3;
-            int numRows = (n + cols - 1) / cols;
-
-            GridBagConstraints gbc = new GridBagConstraints();
-            gbc.fill = GridBagConstraints.HORIZONTAL;
-            gbc.anchor = GridBagConstraints.NORTH;
-            gbc.weightx = 1.0 / cols;
-            gbc.weighty = 0;
-
-            for (int r = 0; r < numRows; r++) {
-                gbc.gridy = r;
-                for (int c = 0; c < cols; c++) {
-                    int idx = r * cols + c;
-                    gbc.gridx = c;
-                    gbc.insets = new Insets(r == 0 ? 2 : 8, 0, 0, 0);
-
-                    JPanel slot = null;
-                    if (idx < n) {
-                        slot = buildReorderTriggerItemSlot(
-                                codesOrdered.get(idx),
-                                namesOrdered.get(idx),
-                                codeToTriggerField.get(codesOrdered.get(idx)));
-                    }
-
-                    JPanel cell = marketPriceColumnDividerWrap(slot, c < cols - 1);
-                    scrollBody.add(cell, gbc);
-                }
-            }
-
-            GridBagConstraints glue = new GridBagConstraints();
-            glue.gridy = numRows;
-            glue.gridx = 0;
-            glue.gridwidth = cols;
-            glue.weighty = 1.0;
-            glue.weightx = 1.0;
-            glue.fill = GridBagConstraints.VERTICAL;
-            JPanel spacer = new JPanel();
-            spacer.setOpaque(false);
-            scrollBody.add(spacer, glue);
-
-            JScrollPane scroll = new JScrollPane(scrollBody,
-                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-            scroll.setBorder(AppUI.newRoundedBorder(8));
-            scroll.getViewport().setBackground(scrollBody.getBackground());
-            scroll.getVerticalScrollBar().setUnitIncrement(16);
-            scroll.setPreferredSize(new Dimension(1080, Math.min(MAIN_FRAME_BASE_H - 260, 520)));
-            centerWrap.add(scroll, BorderLayout.CENTER);
-        }
-
-        JButton submit = new JButton("Submit reorder trigger updates");
-        AppUI.stylePrimaryButton(submit);
-        submit.setEnabled(anyRows);
-        submit.addActionListener(e -> {
-            List<Object[]> toPersist = new ArrayList<>();
-            for (String code : codesOrdered) {
-                JTextField field = codeToTriggerField.get(code);
-                int original = originalTriggers.get(code);
-                String raw = field.getText().trim();
-                int newVal;
-                try {
-                    if (raw.isEmpty()) {
-                        JOptionPane.showMessageDialog(panel,
-                                "Reorder trigger cannot be blank for " + code + ".",
-                                "Input error",
-                                JOptionPane.WARNING_MESSAGE);
-                        return;
-                    }
-                    newVal = Integer.parseInt(raw);
-                } catch (NumberFormatException nf) {
-                    JOptionPane.showMessageDialog(panel,
-                            "Invalid reorder trigger for " + code + ": enter a whole number.",
-                            "Input error",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-                if (newVal < 0) {
-                    JOptionPane.showMessageDialog(panel,
-                            "Reorder trigger cannot be negative for " + code + ".",
-                            "Input error",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-                if (newVal != original) {
-                    toPersist.add(new Object[]{code, newVal});
-                }
-            }
-
-            if (toPersist.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Nothing to save — no reorder triggers were changed.");
-                return;
-            }
-
-            boolean savedAc = true;
-            try {
-                savedAc = connection.getAutoCommit();
-                connection.setAutoCommit(false);
-                try (PreparedStatement updatePs = connection.prepareStatement(
-                        "UPDATE inventory SET `ReOrder Trigger` = ? WHERE `Item Code` = ?");
-                     PreparedStatement movement = connection.prepareStatement(
-                             "INSERT INTO movements (`Item`, `Amount`, `Type`, `Reason`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
-                    for (Object[] row : toPersist) {
-                        String code = (String) row[0];
-                        int newVal = (Integer) row[1];
-                        updatePs.setInt(1, newVal);
-                        updatePs.setString(2, code);
-                        updatePs.executeUpdate();
-                        movement.setString(1, code);
-                        movement.setString(2, " ");
-                        movement.setString(3, "UPDATED TRIGGER");
-                        movement.setString(4, "REORDER_TRIGGER_UPDATE");
-                        movement.setString(5, user.getUsername());
-                        movement.setString(6, dateTime.nowDisplayString());
-                        movement.executeUpdate();
-                    }
-                }
-                connection.commit();
-                JOptionPane.showMessageDialog(panel, "Updated reorder triggers for " + toPersist.size() + " item(s).");
-                refreshActiveMetricsStripNow();
-                try {
-                    showView(workspaceContainer, "Change Reorder Triggers", buildAdjustReorderPanel(user, connection, workspaceContainer));
-                } catch (SQLException ex) {
-                    JOptionPane.showMessageDialog(panel,
-                            "Changes saved, but the screen could not refresh: " + ex.getMessage());
-                }
-            } catch (SQLException ex) {
-                try {
-                    connection.rollback();
-                } catch (SQLException ignored) {
-                    // ignore rollback failure
-                }
-                JOptionPane.showMessageDialog(panel, "Database error: " + ex.getMessage());
-            } finally {
-                try {
-                    connection.setAutoCommit(savedAc);
-                } catch (SQLException ignored) {
-                    // ignore
-                }
-            }
-        });
-
-        JPanel footer = buildActionBar(null, submit);
-        panel.add(centerWrap, BorderLayout.CENTER);
-        panel.add(footer, BorderLayout.SOUTH);
-        return panel;
+        return nameArea;
     }
 
     /** Tweaks preferred width while typing so compact numeric editors grow within bounds. */
@@ -5371,61 +5185,128 @@ public final class WorkspaceShell {
         sync.run();
     }
 
-    /** One grid cell: bold code + wrapped name · compact price field. */
-    private static JPanel buildMarketPriceItemSlot(String code, String name, JTextField priceField) {
-        JPanel outer = new JPanel(new BorderLayout(8, 0));
-        outer.setOpaque(false);
-
-        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        east.setOpaque(false);
-        styleInput(priceField);
-        attachAdaptiveBoundedFieldWidth(priceField, INPUT_HEIGHT, 56, 112);
-
-        outer.add(bulkEditSkuMetaPanel(code, name), BorderLayout.CENTER);
-        outer.add(east, BorderLayout.EAST);
-        east.add(priceField);
-
-        outer.setMinimumSize(new Dimension(100, INPUT_HEIGHT + 4));
-        return outer;
+    /** Select entire field on focus so typing replaces the loaded value instead of appending. */
+    private static void attachSelectAllOnFocus(JTextField field) {
+        field.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusGained(FocusEvent e) {
+                if (!e.isTemporary()) {
+                    SwingUtilities.invokeLater(field::selectAll);
+                }
+            }
+        });
     }
 
-    /** Cell wrapper with a thin vertical rule between columns when {@code drawRightDivider} is true (three-column grid). */
-    private static JPanel marketPriceColumnDividerWrap(JPanel inner, boolean drawRightDivider) {
-        JPanel cell = new JPanel(new BorderLayout());
-        cell.setOpaque(false);
-        int ri = drawRightDivider ? 1 : 0;
-        javax.swing.border.Border outer = BorderFactory.createMatteBorder(0, 0, 0, ri, AppUI.BORDER);
-        javax.swing.border.Border padded = BorderFactory.createCompoundBorder(outer,
-                BorderFactory.createEmptyBorder(6, 6, 6, 6));
-        cell.setBorder(padded);
-        if (inner != null) {
-            cell.add(inner, BorderLayout.CENTER);
+    private static final int BULK_EDIT_FIELD_COL_WIDTH = 108;
+
+    /** Compact input column aligned under header labels. */
+    private static JPanel buildBulkEditFieldColumn(JTextField field, int minFieldW, int maxFieldW) {
+        JPanel col = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        col.setOpaque(false);
+        col.setPreferredSize(new Dimension(BULK_EDIT_FIELD_COL_WIDTH, INPUT_HEIGHT));
+        styleInput(field);
+        attachAdaptiveBoundedFieldWidth(field, INPUT_HEIGHT, minFieldW, maxFieldW);
+        attachSelectAllOnFocus(field);
+        col.add(field);
+        return col;
+    }
+
+    private static GridBagConstraints pricingReorderRowConstraints(int gridx) {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = gridx;
+        gbc.gridy = 0;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.insets = new Insets(0, gridx == 0 ? 0 : 16, 0, 0);
+        if (gridx == 0) {
+            gbc.weightx = 1;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+        } else {
+            gbc.weightx = 0;
+            gbc.fill = GridBagConstraints.NONE;
         }
-        return cell;
+        return gbc;
     }
 
-    /** Bulk-edit {@code Inventory.Market Price} for SKUs with {@code Stock > 0}; blank fields leave existing DB values. */
-    private static JPanel buildMarketPricesBulkPanel(User user, Connection connection, JPanel workspaceContainer)
+    /** Column headers aligned with item rows below. */
+    private static JPanel buildPricingReorderHeaderRow() {
+        JPanel row = new JPanel(new GridBagLayout());
+        row.setOpaque(false);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER),
+                BorderFactory.createEmptyBorder(4, 8, 8, 8)));
+
+        row.add(buildFormLabel("Item"), pricingReorderRowConstraints(0));
+        row.add(buildFormLabel("Market price"), pricingReorderRowConstraints(1));
+        row.add(buildFormLabel("Reorder at"), pricingReorderRowConstraints(2));
+        return row;
+    }
+
+    /** One inventory row: SKU code on top, name + input fields aligned on the row below. */
+    private static JPanel buildPricingReorderItemRow(
+            String code,
+            String name,
+            JTextField marketField,
+            JTextField reorderField) {
+        JPanel row = new JPanel(new GridBagLayout());
+        row.setOpaque(false);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER),
+                BorderFactory.createEmptyBorder(10, 8, 10, 8)));
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(0, 0, 0, 0);
+        row.add(bulkEditSkuCodeLabel(code), gbc);
+
+        gbc.gridy = 1;
+        gbc.insets = new Insets(BULK_EDIT_META_VGAP, 0, 0, 0);
+        row.add(bulkEditSkuNameArea(name), gbc);
+
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.gridx = 1;
+        gbc.insets = new Insets(BULK_EDIT_META_VGAP, 16, 0, 0);
+        row.add(buildBulkEditFieldColumn(marketField, 56, 96), gbc);
+
+        gbc.gridx = 2;
+        reorderField.setHorizontalAlignment(JTextField.TRAILING);
+        row.add(buildBulkEditFieldColumn(reorderField, 52, 88), gbc);
+        return row;
+    }
+
+    /**
+     * Bulk-edit market price and reorder trigger on one screen — both fields sit on the same row per SKU.
+     * Submit applies only rows where a value actually changed.
+     */
+    private static JPanel buildPricingAndReorderPanel(User user, Connection connection, JPanel workspaceContainer)
             throws SQLException {
-        ensureAdmin(user, "Market Prices");
-        JPanel panel = buildFormPanel("Market prices");
+        ensureAdmin(user, "Pricing & Reorder");
+        JPanel panel = buildFormPanel("Pricing & reorder");
         JPanel centerWrap = new JPanel(new BorderLayout(0, 12));
         AppUI.applyPanelBackground(centerWrap);
 
         JPanel intro = buildSectionPanel();
         intro.add(buildSectionText(
-                "Only items with stock on hand are listed. Leave the price box blank to keep the current saved value; "
-                        + "enter a unit amount (for example 12.99 or $12.99) to replace it."));
+                "Each row lists the item code and name with market price and reorder threshold side by side. "
+                        + "Click a field to select its current value, then type to replace it. "
+                        + "Leave market price blank to keep the saved value. Submit saves only rows you actually changed."));
         centerWrap.add(intro, BorderLayout.NORTH);
 
-        LinkedHashMap<String, JTextField> codeToPriceField = new LinkedHashMap<>();
         LinkedHashMap<String, Double> originalPrice = new LinkedHashMap<>();
+        LinkedHashMap<String, Integer> originalTriggers = new LinkedHashMap<>();
+        LinkedHashMap<String, JTextField> codeToPriceField = new LinkedHashMap<>();
+        LinkedHashMap<String, JTextField> codeToTriggerField = new LinkedHashMap<>();
         List<String> codesOrdered = new ArrayList<>();
         List<String> namesOrdered = new ArrayList<>();
 
         boolean anyRows = false;
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT `Item Code`, `Item Name`, `Stock`, `Market Price` FROM inventory WHERE `Stock` > 0 ORDER BY `Item Code` ASC"
+                "SELECT `Item Code`, `Item Name`, `Stock`, `Market Price`, `ReOrder Trigger` "
+                        + "FROM inventory ORDER BY `Item Code` ASC"
         )) {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -5434,11 +5315,15 @@ public final class WorkspaceShell {
                     String nm = Objects.toString(rs.getString("Item Name"), "");
                     double mp = rs.getDouble("Market Price");
                     boolean mpNull = rs.wasNull();
+                    int trigger = rs.getInt("ReOrder Trigger");
+
                     originalPrice.put(code, mpNull ? null : mp);
+                    originalTriggers.put(code, trigger);
 
                     JTextField priceField = new JTextField(mpNull ? "" : String.format(Locale.US, "%.2f", mp), 8);
-                    priceField.setBorder(AppUI.newRoundedBorder(8));
+                    JTextField triggerField = new JTextField(Integer.toString(trigger), 8);
                     codeToPriceField.put(code, priceField);
+                    codeToTriggerField.put(code, triggerField);
                     codesOrdered.add(code);
                     namesOrdered.add(nm);
                 }
@@ -5446,52 +5331,23 @@ public final class WorkspaceShell {
         }
 
         if (!anyRows) {
-            centerWrap.add(buildSectionText("No items with stock on hand."), BorderLayout.CENTER);
+            centerWrap.add(buildSectionText("No inventory rows found."), BorderLayout.CENTER);
         } else {
-            JPanel scrollBody = new JPanel(new GridBagLayout());
+            JPanel scrollBody = new JPanel();
+            scrollBody.setLayout(new BoxLayout(scrollBody, BoxLayout.Y_AXIS));
             scrollBody.setOpaque(true);
             AppUI.applyPanelBackground(scrollBody);
 
-            int n = codesOrdered.size();
-            final int cols = 3;
-            int numRows = (n + cols - 1) / cols;
-
-            GridBagConstraints gbc = new GridBagConstraints();
-            gbc.fill = GridBagConstraints.HORIZONTAL;
-            gbc.anchor = GridBagConstraints.NORTH;
-            gbc.weightx = 1.0 / cols;
-            gbc.weighty = 0;
-
-            for (int r = 0; r < numRows; r++) {
-                gbc.gridy = r;
-                for (int c = 0; c < cols; c++) {
-                    int idx = r * cols + c;
-                    gbc.gridx = c;
-                    gbc.insets = new Insets(r == 0 ? 2 : 8, 0, 0, 0);
-
-                    JPanel slot = null;
-                    if (idx < n) {
-                        slot = buildMarketPriceItemSlot(
-                                codesOrdered.get(idx),
-                                namesOrdered.get(idx),
-                                codeToPriceField.get(codesOrdered.get(idx)));
-                    }
-
-                    JPanel cell = marketPriceColumnDividerWrap(slot, c < cols - 1);
-                    scrollBody.add(cell, gbc);
-                }
+            scrollBody.add(buildPricingReorderHeaderRow());
+            for (int i = 0; i < codesOrdered.size(); i++) {
+                String code = codesOrdered.get(i);
+                scrollBody.add(buildPricingReorderItemRow(
+                        code,
+                        namesOrdered.get(i),
+                        codeToPriceField.get(code),
+                        codeToTriggerField.get(code)));
             }
-
-            GridBagConstraints glue = new GridBagConstraints();
-            glue.gridy = numRows;
-            glue.gridx = 0;
-            glue.gridwidth = cols;
-            glue.weighty = 1.0;
-            glue.weightx = 1.0;
-            glue.fill = GridBagConstraints.VERTICAL;
-            JPanel spacer = new JPanel();
-            spacer.setOpaque(false);
-            scrollBody.add(spacer, glue);
+            scrollBody.add(Box.createVerticalGlue());
 
             JScrollPane scroll = new JScrollPane(scrollBody,
                     JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -5503,46 +5359,85 @@ public final class WorkspaceShell {
             centerWrap.add(scroll, BorderLayout.CENTER);
         }
 
-        JButton submit = new JButton("Submit price updates");
+        JButton submit = new JButton("Save pricing & reorder changes");
         AppUI.stylePrimaryButton(submit);
         submit.setEnabled(anyRows);
         submit.addActionListener(e -> {
-            List<Object[]> updates = new ArrayList<>();
-            for (Map.Entry<String, JTextField> entry : codeToPriceField.entrySet()) {
+            List<Object[]> priceUpdates = new ArrayList<>();
+            List<Object[]> triggerUpdates = new ArrayList<>();
+
+            for (String code : codesOrdered) {
+                JTextField priceField = codeToPriceField.get(code);
                 try {
-                    Double v = parseOptionalMarketPriceInput(entry.getValue().getText());
+                    Double v = parseOptionalMarketPriceInput(priceField.getText());
                     if (v != null) {
-                        Double prior = originalPrice.get(entry.getKey());
-                        if (prior != null && Math.abs(prior - v) < 1e-9) {
-                            continue;
+                        Double prior = originalPrice.get(code);
+                        if (prior == null || Math.abs(prior - v) >= 1e-9) {
+                            priceUpdates.add(new Object[]{code, v});
                         }
-                        updates.add(new Object[]{entry.getKey(), v});
                     }
                 } catch (NumberFormatException nf) {
                     JOptionPane.showMessageDialog(panel,
-                            "Invalid price for " + entry.getKey() + ": " + nf.getMessage(),
+                            "Invalid price for " + code + ": " + nf.getMessage(),
                             "Input error",
                             JOptionPane.WARNING_MESSAGE);
                     return;
                 }
+
+                JTextField triggerField = codeToTriggerField.get(code);
+                int original = originalTriggers.get(code);
+                String raw = triggerField.getText().trim();
+                int newVal;
+                try {
+                    if (raw.isEmpty()) {
+                        JOptionPane.showMessageDialog(panel,
+                                "Reorder trigger cannot be blank for " + code + ".",
+                                "Input error",
+                                JOptionPane.WARNING_MESSAGE);
+                        return;
+                    }
+                    newVal = Integer.parseInt(raw);
+                } catch (NumberFormatException nf) {
+                    JOptionPane.showMessageDialog(panel,
+                            "Invalid reorder trigger for " + code + ": enter a whole number.",
+                            "Input error",
+                            JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                if (newVal < 0) {
+                    JOptionPane.showMessageDialog(panel,
+                            "Reorder trigger cannot be negative for " + code + ".",
+                            "Input error",
+                            JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                if (newVal != original) {
+                    triggerUpdates.add(new Object[]{code, newVal});
+                }
             }
-            if (updates.isEmpty()) {
-                JOptionPane.showMessageDialog(panel, "Nothing to update — every price field was left blank.");
+
+            if (priceUpdates.isEmpty() && triggerUpdates.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "Nothing to save — no prices or reorder triggers were changed.");
                 return;
             }
+
             boolean savedAc = true;
             try {
                 savedAc = connection.getAutoCommit();
                 connection.setAutoCommit(false);
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "UPDATE inventory SET `Market Price` = ? WHERE `Item Code` = ?")) {
-                    for (Object[] row : updates) {
+                try (PreparedStatement pricePs = connection.prepareStatement(
+                        "UPDATE inventory SET `Market Price` = ? WHERE `Item Code` = ?");
+                     PreparedStatement triggerPs = connection.prepareStatement(
+                             "UPDATE inventory SET `ReOrder Trigger` = ? WHERE `Item Code` = ?");
+                     PreparedStatement movement = connection.prepareStatement(
+                             "INSERT INTO movements (`Item`, `Amount`, `Type`, `Reason`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
+                    for (Object[] row : priceUpdates) {
                         String code = (String) row[0];
                         Double newPrice = (Double) row[1];
                         Double prior = originalPrice.get(code);
-                        ps.setDouble(1, newPrice);
-                        ps.setString(2, code);
-                        ps.executeUpdate();
+                        pricePs.setDouble(1, newPrice);
+                        pricePs.setString(2, code);
+                        pricePs.executeUpdate();
                         InventoryAudit.touchMarketPriceUpdated(connection, code);
                         String beforeText = prior == null ? "null" : String.format(Locale.US, "%.4f", prior);
                         String afterText = String.format(Locale.US, "%.4f", newPrice);
@@ -5551,14 +5446,37 @@ public final class WorkspaceShell {
                                 "BULK_MARKET_PRICE",
                                 "from=" + beforeText + " to=" + afterText);
                     }
+                    for (Object[] row : triggerUpdates) {
+                        String code = (String) row[0];
+                        int newVal = (Integer) row[1];
+                        triggerPs.setInt(1, newVal);
+                        triggerPs.setString(2, code);
+                        triggerPs.executeUpdate();
+                        movement.setString(1, code);
+                        movement.setString(2, " ");
+                        movement.setString(3, "UPDATED TRIGGER");
+                        movement.setString(4, "REORDER_TRIGGER_UPDATE");
+                        movement.setString(5, user.getUsername());
+                        movement.setString(6, dateTime.nowDisplayString());
+                        movement.executeUpdate();
+                    }
                 }
                 connection.commit();
-                JOptionPane.showMessageDialog(panel, "Updated market price for " + updates.size() + " item(s).");
+                StringBuilder msg = new StringBuilder("Saved changes");
+                if (!priceUpdates.isEmpty()) {
+                    msg.append(" — ").append(priceUpdates.size()).append(" market price(s)");
+                }
+                if (!triggerUpdates.isEmpty()) {
+                    msg.append(priceUpdates.isEmpty() ? " — " : ", ").append(triggerUpdates.size()).append(" reorder trigger(s)");
+                }
+                msg.append(".");
+                JOptionPane.showMessageDialog(panel, msg.toString());
                 refreshActiveMetricsStripNow();
                 try {
-                    showView(workspaceContainer, "Market Prices", buildMarketPricesBulkPanel(user, connection, workspaceContainer));
+                    showView(workspaceContainer, "Pricing & Reorder", buildPricingAndReorderPanel(user, connection, workspaceContainer));
                 } catch (SQLException ex) {
-                    JOptionPane.showMessageDialog(panel, "Prices saved, but the screen could not refresh: " + ex.getMessage());
+                    JOptionPane.showMessageDialog(panel,
+                            "Changes saved, but the screen could not refresh: " + ex.getMessage());
                 }
             } catch (SQLException ex) {
                 try {
@@ -5581,6 +5499,7 @@ public final class WorkspaceShell {
         panel.add(footer, BorderLayout.SOUTH);
         return panel;
     }
+
 
     private static JPanel buildSuppliersPanel(User user, Connection connection) throws SQLException {
         ensureAdmin(user, "Suppliers");
@@ -6281,7 +6200,7 @@ public final class WorkspaceShell {
         deferPackTableColumns(table);
 
         JTextField filter = new JTextField();
-        filter.setBorder(AppUI.newRoundedBorder(8));
+        styleInput(filter);
         JComboBox<StorageLocationPick> locPick = new JComboBox<>();
 
         Runnable reload = () -> {
@@ -6338,13 +6257,28 @@ public final class WorkspaceShell {
         top.add(hint, BorderLayout.NORTH);
         top.add(scroll, BorderLayout.CENTER);
 
-        JPanel controls = new JPanel(new GridLayout(2, 2, 8, 8));
+        JPanel controls = new JPanel(new GridBagLayout());
         AppUI.applyPanelBackground(controls);
-        controls.add(new JLabel("Location"));
+        GridBagConstraints cg = new GridBagConstraints();
+        cg.insets = FORM_GRID_INSETS;
+        cg.anchor = GridBagConstraints.WEST;
+        cg.fill = GridBagConstraints.HORIZONTAL;
+        cg.gridx = 0;
+        cg.gridy = 0;
+        cg.weightx = 0;
+        controls.add(buildFormLabel("Location"), cg);
+        cg.gridx = 1;
+        cg.weightx = 1;
         styleComboMatchInputRow(locPick);
-        controls.add(locPick);
-        controls.add(new JLabel("Item filter"));
-        controls.add(filter);
+        controls.add(locPick, cg);
+        cg.gridx = 0;
+        cg.gridy = 1;
+        cg.weightx = 0;
+        controls.add(buildFormLabel("Item filter"), cg);
+        cg.gridx = 1;
+        cg.weightx = 1;
+        styleInput(filter);
+        controls.add(filter, cg);
 
         JButton moveBtn = new JButton("Move selected bin quantity…");
         styleSecondaryButton(moveBtn);
@@ -7668,7 +7602,7 @@ public final class WorkspaceShell {
         JPanel filterForm = new JPanel(new GridBagLayout());
         AppUI.applyPanelBackground(filterForm);
         GridBagConstraints gb = new GridBagConstraints();
-        gb.insets = new Insets(4, 0, 4, 10);
+        gb.insets = FORM_GRID_INSETS;
 
         JComboBox<String> reportType = user.hasAdminRights()
                 ? new JComboBox<>(new String[]{
@@ -7686,8 +7620,7 @@ public final class WorkspaceShell {
         JTextField fromDate = new JTextField();
         JTextField toDate = new JTextField();
         JTextField inactiveDays = new JTextField("90", 5);
-        styleInput(search, fromDate, toDate);
-        styleInputCompact(inactiveDays);
+        styleInput(search, fromDate, toDate, inactiveDays);
         styleComboMatchInputRow(reportType);
 
         fromDate.setText(LocalDate.now().minusDays(30).toString());
@@ -7699,7 +7632,7 @@ public final class WorkspaceShell {
         gb.anchor = GridBagConstraints.LINE_END;
         gb.fill = GridBagConstraints.NONE;
         gb.weightx = 0;
-        filterForm.add(new JLabel("Report type"), gb);
+        filterForm.add(buildFormLabel("Report type"), gb);
         gb.gridx = 1;
         gb.anchor = GridBagConstraints.LINE_START;
         gb.fill = GridBagConstraints.HORIZONTAL;
@@ -7712,7 +7645,7 @@ public final class WorkspaceShell {
         gb.anchor = GridBagConstraints.LINE_END;
         gb.fill = GridBagConstraints.NONE;
         gb.weightx = 0;
-        filterForm.add(new JLabel("Search (optional)"), gb);
+        filterForm.add(buildFormLabel("Search (optional)"), gb);
         gb.gridx = 1;
         gb.anchor = GridBagConstraints.LINE_START;
         gb.fill = GridBagConstraints.HORIZONTAL;
@@ -7725,7 +7658,7 @@ public final class WorkspaceShell {
         gb.anchor = GridBagConstraints.LINE_END;
         gb.fill = GridBagConstraints.NONE;
         gb.weightx = 0;
-        filterForm.add(new JLabel("From date (yyyy-MM-dd)"), gb);
+        filterForm.add(buildFormLabel("From date (yyyy-MM-dd)"), gb);
         gb.gridx = 1;
         gb.anchor = GridBagConstraints.LINE_START;
         gb.fill = GridBagConstraints.HORIZONTAL;
@@ -7738,14 +7671,14 @@ public final class WorkspaceShell {
         gb.anchor = GridBagConstraints.LINE_END;
         gb.fill = GridBagConstraints.NONE;
         gb.weightx = 0;
-        filterForm.add(new JLabel("To date (yyyy-MM-dd)"), gb);
+        filterForm.add(buildFormLabel("To date (yyyy-MM-dd)"), gb);
         gb.gridx = 1;
         gb.anchor = GridBagConstraints.LINE_START;
         gb.fill = GridBagConstraints.HORIZONTAL;
         gb.weightx = 1;
         filterForm.add(toDate, gb);
 
-        JLabel inactiveLabel = new JLabel("Inactive days (dead stock)");
+        JLabel inactiveLabel = buildFormLabel("Inactive days (dead stock)");
         r++;
         gb.gridx = 0;
         gb.gridy = r;
@@ -7804,6 +7737,7 @@ public final class WorkspaceShell {
         contentCards.add(salesScroll, "Sales");
         contentCards.add(usersScroll, "Users");
         contentCards.add(analyticsScroll, "Analytics");
+        contentCards.setPreferredSize(new Dimension(900, 360));
 
         final ReportData[] latestReport = new ReportData[1];
         final String[] latestReportType = new String[]{"Sales"};
@@ -8774,22 +8708,43 @@ public final class WorkspaceShell {
         return heading;
     }
 
-    /** Creates a section body text label with standard style. */
+    /** Creates a section body text label with standard style; wraps long copy for readability. */
     private static JLabel buildSectionText(String text) {
-        JLabel label = new JLabel(text, SwingConstants.LEFT);
+        String body = text == null ? "" : text.trim();
+        JLabel label;
+        if (body.length() > 96 || body.contains("\n")) {
+            String html = htmlEscapePlainTextForJLabel(body).replace("\n", "<br>");
+            label = new JLabel("<html><body style='width:720px;color:#a1a1a1;'>" + html + "</body></html>");
+        } else {
+            label = new JLabel(body, SwingConstants.LEFT);
+            label.setForeground(AppUI.TEXT_MUTED);
+        }
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /** Form label with consistent width for GridBag right-column alignment. */
+    private static JLabel buildFormLabel(String text) {
+        JLabel label = new JLabel(text, SwingConstants.RIGHT);
+        label.setForeground(AppUI.TEXT_MUTED);
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
+        label.setMinimumSize(new Dimension(FORM_LABEL_MIN_WIDTH, AppUI.CONTROL_HEIGHT));
+        label.setPreferredSize(new Dimension(FORM_LABEL_MIN_WIDTH, AppUI.CONTROL_HEIGHT));
         return label;
     }
 
     /** Creates a left/right aligned action button bar. */
     private static JPanel buildActionBar(JButton leftButton, JButton rightButton) {
-        JPanel actionBar = new JPanel(new BorderLayout());
-        actionBar.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        JPanel actionBar = new JPanel(new BorderLayout(12, 0));
+        actionBar.setBorder(BorderFactory.createEmptyBorder(14, 0, 0, 0));
         AppUI.applyPanelBackground(actionBar);
         if (leftButton != null) {
+            leftButton.setMinimumSize(new Dimension(120, AppUI.CONTROL_HEIGHT));
             actionBar.add(leftButton, BorderLayout.WEST);
         }
         if (rightButton != null) {
+            rightButton.setMinimumSize(new Dimension(120, AppUI.CONTROL_HEIGHT));
             actionBar.add(rightButton, BorderLayout.EAST);
         }
         return actionBar;
@@ -8797,8 +8752,7 @@ public final class WorkspaceShell {
 
     /** Applies shared secondary button styling. */
     private static void styleSecondaryButton(JButton button) {
-        button.setBorder(AppUI.newRoundedBorder(8));
-        button.setFocusPainted(false);
+        AppUI.styleSecondaryButton(button);
     }
 
     /** Rebuilds draft line table rows from map-backed values. */
@@ -9866,26 +9820,24 @@ public final class WorkspaceShell {
     /** Sizes combo boxes like {@link #styleInput(JTextField...)} for aligned form rows. */
     private static void styleComboMatchInputRow(JComboBox<?>... combos) {
         for (JComboBox<?> combo : combos) {
-            combo.setBorder(AppUI.newRoundedBorder(8));
-            Dimension p = combo.getPreferredSize();
-            combo.setPreferredSize(new Dimension(p.width, INPUT_HEIGHT));
+            AppUI.applyComboField(combo);
         }
     }
 
     /** Applies shared rounded-border styling to input fields. */
     private static void styleInput(JTextField... fields) {
         for (JTextField field : fields) {
-            field.setBorder(AppUI.newRoundedBorder(8));
-            field.setPreferredSize(new Dimension(field.getPreferredSize().width, INPUT_HEIGHT));
+            AppUI.applyInputField(field);
         }
     }
 
     /** Compact height for Add Item fields; horizontal size uses preferred width so columns align with defaults. */
     private static void styleInputCompact(JTextField... fields) {
         for (JTextField field : fields) {
-            field.setBorder(AppUI.newRoundedBorder(8));
+            AppUI.applyInputField(field);
             Dimension pref = field.getPreferredSize();
             field.setPreferredSize(new Dimension(pref.width, ADD_ITEM_INPUT_HEIGHT));
+            field.setMinimumSize(new Dimension(Math.min(pref.width, AppUI.INPUT_MIN_WIDTH), ADD_ITEM_INPUT_HEIGHT));
         }
     }
 
@@ -9904,17 +9856,17 @@ public final class WorkspaceShell {
      */
     private static void stylePasswordInput(JPasswordField... fields) {
         for (JPasswordField field : fields) {
-            field.setBorder(AppUI.newRoundedBorder(8));
-            field.setPreferredSize(new Dimension(field.getPreferredSize().width, INPUT_HEIGHT));
+            AppUI.applyPasswordField(field);
         }
     }
 
     /** Matches {@link #styleInputCompact(JTextField...)} height for aligned password rows. */
     private static void stylePasswordInputCompact(JPasswordField... fields) {
         for (JPasswordField field : fields) {
-            field.setBorder(AppUI.newRoundedBorder(8));
+            AppUI.applyPasswordField(field);
             Dimension pref = field.getPreferredSize();
             field.setPreferredSize(new Dimension(pref.width, ADD_ITEM_INPUT_HEIGHT));
+            field.setMinimumSize(new Dimension(Math.min(pref.width, AppUI.INPUT_MIN_WIDTH), ADD_ITEM_INPUT_HEIGHT));
         }
     }
 

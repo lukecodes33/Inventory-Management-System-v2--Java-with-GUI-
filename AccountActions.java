@@ -126,7 +126,7 @@ public class AccountActions {
         gbc.gridx = 0;
         form.add(new JLabel("Current Password"), gbc);
         JPasswordField currentPasswordText = new JPasswordField(20);
-        currentPasswordText.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(currentPasswordText);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         form.add(currentPasswordText, gbc);
@@ -136,7 +136,7 @@ public class AccountActions {
         gbc.weightx = 0;
         form.add(new JLabel("New Password"), gbc);
         JPasswordField newPasswordText = new JPasswordField(20);
-        newPasswordText.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(newPasswordText);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         form.add(newPasswordText, gbc);
@@ -146,7 +146,7 @@ public class AccountActions {
         gbc.weightx = 0;
         form.add(new JLabel("Confirm New Password"), gbc);
         JPasswordField newPasswordConfirmationText = new JPasswordField(20);
-        newPasswordConfirmationText.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(newPasswordConfirmationText);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         form.add(newPasswordConfirmationText, gbc);
@@ -206,8 +206,7 @@ public class AccountActions {
         refreshChecklist.run();
 
         JButton cancelButton = new JButton("Cancel");
-        cancelButton.setBorder(AppUI.newRoundedBorder(8));
-        cancelButton.setFocusPainted(false);
+        AppUI.styleSecondaryButton(cancelButton);
         JButton submitButton = new JButton("Submit");
         AppUI.stylePrimaryButton(submitButton);
         cancelButton.addActionListener(e -> {

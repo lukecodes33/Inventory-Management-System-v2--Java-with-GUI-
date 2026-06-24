@@ -43,16 +43,17 @@ public final class FirstAdministratorSetupDialog {
      */
     public static Outcome show(Connection connection) {
         JDialog dialog = new JDialog((java.awt.Frame) null, "Welcome — Create administrator", true);
-        dialog.setSize(460, 360);
+        dialog.setSize(500, AppUI.usesEmbeddedTitleBar() ? 420 : 400);
+        dialog.setMinimumSize(new java.awt.Dimension(460, 380));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         dialog.setLayout(new BorderLayout());
 
         JPanel panel = new JPanel(new GridBagLayout());
         AppUI.applyPanelBackground(panel);
-        panel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
+        panel.setBorder(BorderFactory.createEmptyBorder(22, 24, 22, 24));
 
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(6, 8, 6, 8);
+        gbc.insets = new Insets(8, 0, 8, 12);
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel header = new JLabel("Set up your workspace", SwingConstants.LEFT);
@@ -60,31 +61,35 @@ public final class FirstAdministratorSetupDialog {
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
         panel.add(header, gbc);
 
         JLabel sub = new JLabel(
-                "<html>No user accounts exist yet. Enter your name and a strong password.<br>"
-                        + "You will be the first administrator.</html>"
+                "<html><body style='width:400px;color:#a1a1a1;'>No user accounts exist yet. Enter your name and a strong password.<br>"
+                        + "You will be the first administrator.</body></html>"
         );
         gbc.gridy = 1;
-        gbc.weightx = 1.0;
         panel.add(sub, gbc);
 
-        JLabel nameLabel = new JLabel("Your name");
+        JLabel nameLabel = new JLabel("Your name", SwingConstants.RIGHT);
+        nameLabel.setForeground(AppUI.TEXT_MUTED);
         gbc.gridy = 2;
         gbc.gridwidth = 1;
         gbc.weightx = 0;
         gbc.gridx = 0;
+        gbc.anchor = GridBagConstraints.LINE_END;
         panel.add(nameLabel, gbc);
 
         JTextField nameField = new JTextField(24);
-        nameField.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyInputField(nameField);
         gbc.gridx = 1;
+        gbc.anchor = GridBagConstraints.LINE_START;
         gbc.weightx = 1.0;
         panel.add(nameField, gbc);
 
         JLabel usernameHint = new JLabel(" ");
         usernameHint.setFont(usernameHint.getFont().deriveFont(Font.PLAIN, 11f));
+        usernameHint.setForeground(AppUI.TEXT_MUTED);
         gbc.gridx = 0;
         gbc.gridy = 3;
         gbc.gridwidth = 2;
@@ -120,29 +125,32 @@ public final class FirstAdministratorSetupDialog {
             }
         });
 
-        JLabel passwordLabel = new JLabel("Password");
+        JLabel passwordLabel = new JLabel("Password", SwingConstants.RIGHT);
+        passwordLabel.setForeground(AppUI.TEXT_MUTED);
         gbc.gridwidth = 1;
         gbc.gridy = 4;
         gbc.gridx = 0;
         gbc.weightx = 0;
+        gbc.anchor = GridBagConstraints.LINE_END;
         panel.add(passwordLabel, gbc);
 
         JPasswordField passwordField = new JPasswordField(24);
-        passwordField.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(passwordField);
         gbc.gridx = 1;
+        gbc.anchor = GridBagConstraints.LINE_START;
         gbc.weightx = 1.0;
         panel.add(passwordField, gbc);
 
-        JLabel confirmLabel = new JLabel("Confirm password");
+        JLabel confirmLabel = new JLabel("Confirm password", SwingConstants.RIGHT);
+        confirmLabel.setForeground(AppUI.TEXT_MUTED);
         gbc.gridx = 0;
         gbc.gridy = 5;
         gbc.weightx = 0;
         panel.add(confirmLabel, gbc);
 
         JPasswordField confirmField = new JPasswordField(24);
-        confirmField.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(confirmField);
         gbc.gridx = 1;
-        gbc.weightx = 1.0;
         panel.add(confirmField, gbc);
 
         JButton createButton = new JButton("Create administrator account");
@@ -151,6 +159,7 @@ public final class FirstAdministratorSetupDialog {
         gbc.gridy = 6;
         gbc.anchor = GridBagConstraints.EAST;
         gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = new Insets(16, 0, 0, 0);
         panel.add(createButton, gbc);
 
         dialog.add(panel, BorderLayout.CENTER);
@@ -213,6 +222,8 @@ public final class FirstAdministratorSetupDialog {
                 }
             }
         });
+
+        confirmField.addActionListener(e -> createButton.doClick());
 
         dialog.addWindowListener(new WindowAdapter() {
             @Override

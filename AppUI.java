@@ -8,6 +8,7 @@ import javax.swing.JList;
 import javax.swing.JPasswordField;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JRootPane;
 import javax.swing.JPanel;
@@ -20,6 +21,7 @@ import java.awt.AWTEvent;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Toolkit;
 import java.awt.Window;
@@ -59,6 +61,11 @@ public final class AppUI {
     /** Negative P/L and losses (readable on dark). */
     public static final Color DANGER = new Color(0xf87171);
 
+    /** Standard single-line control height (text fields, combos). */
+    public static final int CONTROL_HEIGHT = 36;
+    /** Minimum width for primary form inputs. */
+    public static final int INPUT_MIN_WIDTH = 180;
+
     /** {@link JLabel#getClientProperty(Object)} — skip automatic foreground theming. */
     public static final String CLIENT_PRESERVE_FOREGROUND = "ims.preserveForeground";
     /** {@link JComponent#getClientProperty(Object)} value {@code "card"} or {@code "elevated"}. */
@@ -95,9 +102,14 @@ public final class AppUI {
         UIManager.put("TextField.font", new Font("SansSerif", Font.PLAIN, 13));
         UIManager.put("PasswordField.font", new Font("SansSerif", Font.PLAIN, 13));
         UIManager.put("Label.font", new Font("SansSerif", Font.PLAIN, 13));
-        UIManager.put("Button.font", new Font("SansSerif", Font.BOLD, 13));
+        UIManager.put("Button.font", new Font("SansSerif", Font.PLAIN, 13));
+        UIManager.put("ComboBox.font", new Font("SansSerif", Font.PLAIN, 13));
+        UIManager.put("Table.font", new Font("SansSerif", Font.PLAIN, 13));
+        UIManager.put("TableHeader.font", new Font("SansSerif", Font.BOLD, 13));
         UIManager.put("SplitPane.background", BACKGROUND);
         UIManager.put("SplitPane.dividerFocusColor", BORDER);
+        UIManager.put("ScrollBar.thumb", SURFACE_ELEVATED);
+        UIManager.put("ScrollBar.track", BACKGROUND);
 
         installGlobalWindowStyler();
     }
@@ -169,8 +181,9 @@ public final class AppUI {
         button.setBackground(PRIMARY);
         button.setForeground(PRIMARY_TEXT);
         button.setFocusPainted(false);
-        button.setBorder(newRoundedBorder(8));
+        button.setBorder(controlBorder(BORDER));
         button.setOpaque(true);
+        button.setMinimumSize(new java.awt.Dimension(96, CONTROL_HEIGHT));
     }
 
     /** @param button secondary control on dark surfaces */
@@ -178,10 +191,19 @@ public final class AppUI {
         button.setBackground(SURFACE_ELEVATED);
         button.setForeground(TEXT);
         button.setFocusPainted(false);
-        button.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(BORDER),
-                BorderFactory.createEmptyBorder(8, 12, 8, 12)));
+        button.setBorder(controlBorder(BORDER));
         button.setOpaque(true);
+        button.setMinimumSize(new java.awt.Dimension(96, CONTROL_HEIGHT));
+    }
+
+    /** Sidebar navigation button styling. */
+    public static void styleNavButton(JButton button, boolean selected) {
+        button.setBackground(selected ? SURFACE_ELEVATED : SURFACE);
+        button.setForeground(selected ? PRIMARY : TEXT);
+        button.setFocusPainted(false);
+        button.setBorder(controlBorder(selected ? PRIMARY : BORDER));
+        button.setOpaque(true);
+        button.setMinimumSize(new java.awt.Dimension(120, CONTROL_HEIGHT));
     }
 
     /** Marks a panel as a card surface ({@link #SURFACE}) for tree styling. */
@@ -198,12 +220,70 @@ public final class AppUI {
         component.setBackground(SURFACE_ELEVATED);
     }
 
-    /** @param radius corner padding mirrored for empty insets inside the line border */
-    public static Border newRoundedBorder(int radius) {
+    /** Simple 1px outline for tables, scroll panes, and containers (no inner padding). */
+    public static Border lineBorder() {
+        return BorderFactory.createLineBorder(BORDER);
+    }
+
+    /** Border for text fields and combo boxes — tight vertical padding so text is not clipped. */
+    public static Border inputBorder() {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(BORDER),
-                BorderFactory.createEmptyBorder(radius, radius + 4, radius, radius + 4)
+                BorderFactory.createEmptyBorder(5, 10, 5, 10)
         );
+    }
+
+    /** Border for buttons and nav items. */
+    public static Border controlBorder(Color borderColor) {
+        Color line = borderColor == null ? BORDER : borderColor;
+        return BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(line),
+                BorderFactory.createEmptyBorder(8, 14, 8, 14)
+        );
+    }
+
+    /**
+     * @param radius legacy parameter; maps to {@link #lineBorder()} for containers
+     *             or {@link #inputBorder()} when used on small controls via {@link #applyInputField(JTextField)}.
+     */
+    public static Border newRoundedBorder(int radius) {
+        return lineBorder();
+    }
+
+    /** Applies consistent height, width floor, and {@link #inputBorder()} to a text field. */
+    public static void applyInputField(JTextField field) {
+        if (field == null) {
+            return;
+        }
+        field.setBorder(inputBorder());
+        Dimension pref = field.getPreferredSize();
+        int w = Math.max(pref.width, INPUT_MIN_WIDTH);
+        field.setPreferredSize(new java.awt.Dimension(w, CONTROL_HEIGHT));
+        field.setMinimumSize(new java.awt.Dimension(Math.min(w, INPUT_MIN_WIDTH), CONTROL_HEIGHT));
+    }
+
+    /** Matches {@link #applyInputField(JTextField)} for password fields. */
+    public static void applyPasswordField(JPasswordField field) {
+        if (field == null) {
+            return;
+        }
+        field.setBorder(inputBorder());
+        Dimension pref = field.getPreferredSize();
+        int w = Math.max(pref.width, INPUT_MIN_WIDTH);
+        field.setPreferredSize(new java.awt.Dimension(w, CONTROL_HEIGHT));
+        field.setMinimumSize(new java.awt.Dimension(Math.min(w, INPUT_MIN_WIDTH), CONTROL_HEIGHT));
+    }
+
+    /** Sizes combo boxes to align with {@link #CONTROL_HEIGHT}. */
+    public static void applyComboField(JComboBox<?> combo) {
+        if (combo == null) {
+            return;
+        }
+        combo.setBorder(inputBorder());
+        Dimension pref = combo.getPreferredSize();
+        int w = Math.max(pref.width, INPUT_MIN_WIDTH);
+        combo.setPreferredSize(new java.awt.Dimension(w, CONTROL_HEIGHT));
+        combo.setMinimumSize(new java.awt.Dimension(Math.min(w, INPUT_MIN_WIDTH), CONTROL_HEIGHT));
     }
 
     /** @param component root Swing node whose subtree should inherit background/text defaults */
@@ -244,13 +324,18 @@ public final class AppUI {
             field.setForeground(TEXT);
             field.setCaretColor(TEXT);
             if (!(field instanceof JPasswordField)) {
-                field.setBorder(newRoundedBorder(8));
+                field.setBorder(inputBorder());
             }
         } else if (component instanceof JPasswordField passwordField) {
             passwordField.setBackground(INPUT);
             passwordField.setForeground(TEXT);
             passwordField.setCaretColor(TEXT);
-            passwordField.setBorder(newRoundedBorder(8));
+            passwordField.setBorder(inputBorder());
+        } else if (component instanceof JTextArea textArea) {
+            textArea.setBackground(INPUT);
+            textArea.setForeground(TEXT);
+            textArea.setCaretColor(TEXT);
+            textArea.setBorder(inputBorder());
         } else if (component instanceof JComboBox<?> comboBox) {
             comboBox.setBackground(INPUT);
             comboBox.setForeground(TEXT);
@@ -283,7 +368,8 @@ public final class AppUI {
         } else if (component instanceof JScrollPane scrollPane) {
             scrollPane.getViewport().setBackground(BACKGROUND);
             scrollPane.setBackground(BACKGROUND);
-            scrollPane.setBorder(BorderFactory.createLineBorder(BORDER));
+            scrollPane.setBorder(lineBorder());
+            scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         } else if (component instanceof JLabel label) {
             if (!Boolean.TRUE.equals(label.getClientProperty(CLIENT_PRESERVE_FOREGROUND))) {
                 label.setForeground(TEXT);

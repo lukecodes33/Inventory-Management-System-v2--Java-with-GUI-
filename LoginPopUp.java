@@ -27,16 +27,17 @@ public class LoginPopUp {
      */
     public LoginCredentials createLoginPopUp() {
         JDialog dialog = new JDialog((java.awt.Frame) null, "Inventory Management System", true);
-        dialog.setSize(420, 230);
+        dialog.setSize(460, AppUI.usesEmbeddedTitleBar() ? 280 : 260);
+        dialog.setMinimumSize(new java.awt.Dimension(420, 240));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         dialog.setLayout(new BorderLayout());
 
         JPanel panel = new JPanel(new GridBagLayout());
         AppUI.applyPanelBackground(panel);
-        panel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
+        panel.setBorder(BorderFactory.createEmptyBorder(22, 24, 22, 24));
 
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.insets = new Insets(8, 0, 8, 12);
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel header = new JLabel("Sign In", SwingConstants.LEFT);
@@ -44,29 +45,37 @@ public class LoginPopUp {
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
         panel.add(header, gbc);
 
-        JLabel userLabel = new JLabel("Username");
+        JLabel userLabel = new JLabel("Username", SwingConstants.RIGHT);
+        userLabel.setForeground(AppUI.TEXT_MUTED);
         gbc.gridy = 1;
         gbc.gridwidth = 1;
+        gbc.weightx = 0;
         gbc.gridx = 0;
+        gbc.anchor = GridBagConstraints.LINE_END;
         panel.add(userLabel, gbc);
 
         JTextField userText = new JTextField(20);
-        userText.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyInputField(userText);
         gbc.gridx = 1;
+        gbc.anchor = GridBagConstraints.LINE_START;
         gbc.weightx = 1.0;
         panel.add(userText, gbc);
 
-        JLabel passwordLabel = new JLabel("Password");
+        JLabel passwordLabel = new JLabel("Password", SwingConstants.RIGHT);
+        passwordLabel.setForeground(AppUI.TEXT_MUTED);
         gbc.gridx = 0;
         gbc.gridy = 2;
         gbc.weightx = 0;
+        gbc.anchor = GridBagConstraints.LINE_END;
         panel.add(passwordLabel, gbc);
 
         JPasswordField passwordText = new JPasswordField(20);
-        passwordText.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.applyPasswordField(passwordText);
         gbc.gridx = 1;
+        gbc.anchor = GridBagConstraints.LINE_START;
         gbc.weightx = 1.0;
         panel.add(passwordText, gbc);
 
@@ -76,7 +85,9 @@ public class LoginPopUp {
         gbc.gridy = 3;
         gbc.anchor = GridBagConstraints.EAST;
         gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = new Insets(16, 0, 0, 0);
         panel.add(loginButton, gbc);
+
         if (AppUI.usesEmbeddedTitleBar()) {
             dialog.add(AppUI.createApplicationTitleBar("Inventory Management System"), BorderLayout.NORTH);
         }
@@ -93,6 +104,8 @@ public class LoginPopUp {
             submitted[0] = true;
             dialog.dispose();
         });
+
+        passwordText.addActionListener(e -> loginButton.doClick());
 
         dialog.addWindowListener(new WindowAdapter() {
             @Override
