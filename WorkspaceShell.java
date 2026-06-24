@@ -5211,23 +5211,15 @@ public final class WorkspaceShell {
         return col;
     }
 
-    private static GridBagConstraints pricingReorderRowConstraints(int gridx) {
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.gridx = gridx;
-        gbc.gridy = 0;
-        gbc.anchor = GridBagConstraints.NORTHWEST;
-        gbc.insets = new Insets(0, gridx == 0 ? 0 : 16, 0, 0);
-        if (gridx == 0) {
-            gbc.weightx = 1;
-            gbc.fill = GridBagConstraints.HORIZONTAL;
-        } else {
-            gbc.weightx = 0;
-            gbc.fill = GridBagConstraints.NONE;
-        }
-        return gbc;
+    /** Small left-aligned muted column header that lines up over its item-row column. */
+    private static JLabel bulkEditColumnHeader(String text) {
+        JLabel label = new JLabel(text);
+        label.setForeground(AppUI.TEXT_MUTED);
+        label.setFont(label.getFont().deriveFont(Font.BOLD, 11f));
+        return label;
     }
 
-    /** Column headers aligned with item rows below. */
+    /** Column headers left-aligned over the item, market-price, and reorder columns below. */
     private static JPanel buildPricingReorderHeaderRow() {
         JPanel row = new JPanel(new GridBagLayout());
         row.setOpaque(false);
@@ -5235,9 +5227,28 @@ public final class WorkspaceShell {
                 BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER),
                 BorderFactory.createEmptyBorder(4, 8, 8, 8)));
 
-        row.add(buildFormLabel("Item"), pricingReorderRowConstraints(0));
-        row.add(buildFormLabel("Market price"), pricingReorderRowConstraints(1));
-        row.add(buildFormLabel("Reorder at"), pricingReorderRowConstraints(2));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(0, 0, 0, 0);
+        row.add(bulkEditColumnHeader("Item"), gbc);
+
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.gridx = 1;
+        gbc.insets = new Insets(0, 16, 0, 0);
+        JLabel marketHeader = bulkEditColumnHeader("Market price");
+        marketHeader.setPreferredSize(new Dimension(BULK_EDIT_FIELD_COL_WIDTH, marketHeader.getPreferredSize().height));
+        row.add(marketHeader, gbc);
+
+        gbc.gridx = 2;
+        JLabel reorderHeader = bulkEditColumnHeader("Reorder at");
+        reorderHeader.setPreferredSize(new Dimension(BULK_EDIT_FIELD_COL_WIDTH, reorderHeader.getPreferredSize().height));
+        row.add(reorderHeader, gbc);
+        capRowHeight(row);
         return row;
     }
 
@@ -5275,7 +5286,14 @@ public final class WorkspaceShell {
         gbc.gridx = 2;
         reorderField.setHorizontalAlignment(JTextField.TRAILING);
         row.add(buildBulkEditFieldColumn(reorderField, 52, 88), gbc);
+        capRowHeight(row);
         return row;
+    }
+
+    /** Locks a stacked-list row to its preferred height so BoxLayout cannot stretch gaps when the window is tall. */
+    private static void capRowHeight(JComponent row) {
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
     }
 
     /**
@@ -8724,13 +8742,15 @@ public final class WorkspaceShell {
         return label;
     }
 
-    /** Form label with consistent width for GridBag right-column alignment. */
+    /** Form label with consistent width for GridBag right-column alignment; grows to fit long captions so text is never clipped. */
     private static JLabel buildFormLabel(String text) {
         JLabel label = new JLabel(text, SwingConstants.RIGHT);
         label.setForeground(AppUI.TEXT_MUTED);
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
-        label.setMinimumSize(new Dimension(FORM_LABEL_MIN_WIDTH, AppUI.CONTROL_HEIGHT));
-        label.setPreferredSize(new Dimension(FORM_LABEL_MIN_WIDTH, AppUI.CONTROL_HEIGHT));
+        int natural = label.getPreferredSize().width;
+        int w = Math.max(natural, FORM_LABEL_MIN_WIDTH);
+        label.setMinimumSize(new Dimension(w, AppUI.CONTROL_HEIGHT));
+        label.setPreferredSize(new Dimension(w, AppUI.CONTROL_HEIGHT));
         return label;
     }
 

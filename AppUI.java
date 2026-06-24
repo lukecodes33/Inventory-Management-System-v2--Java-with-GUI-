@@ -17,12 +17,15 @@ import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import javax.swing.UnsupportedLookAndFeelException;
 import javax.swing.border.Border;
+import javax.swing.Painter;
+import javax.swing.plaf.ColorUIResource;
 import java.awt.AWTEvent;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.Graphics2D;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.AWTEventListener;
@@ -111,7 +114,63 @@ public final class AppUI {
         UIManager.put("ScrollBar.thumb", SURFACE_ELEVATED);
         UIManager.put("ScrollBar.track", BACKGROUND);
 
+        installNimbusComboOverrides();
+
         installGlobalWindowStyler();
+    }
+
+    /**
+     * Nimbus paints combo boxes with a bright gradient that ignores {@link Component#setBackground(Color)}.
+     * This replaces the relevant state painters with flat fills so dropdowns match the dark text inputs.
+     */
+    private static void installNimbusComboOverrides() {
+        Painter<JComponent> fieldFill = (g, c, w, h) -> {
+            g.setColor(INPUT);
+            g.fillRect(0, 0, w, h);
+            g.setColor(BORDER);
+            g.drawRect(0, 0, w - 1, h - 1);
+        };
+        Painter<JComponent> disabledFill = (g, c, w, h) -> {
+            g.setColor(SURFACE_ELEVATED);
+            g.fillRect(0, 0, w, h);
+            g.setColor(BORDER);
+            g.drawRect(0, 0, w - 1, h - 1);
+        };
+        Painter<JComponent> arrowFill = (g, c, w, h) -> {
+            g.setColor(INPUT);
+            g.fillRect(0, 0, w, h);
+        };
+        Painter<JComponent> arrowGlyph = (g, c, w, h) -> {
+            int cx = w / 2;
+            int cy = h / 2;
+            g.setColor(TEXT_MUTED);
+            int[] xs = {cx - 4, cx + 4, cx};
+            int[] ys = {cy - 2, cy - 2, cy + 3};
+            g.fillPolygon(xs, ys, 3);
+        };
+
+        String[] enabledStates = {
+                "Enabled", "Pressed", "Focused", "MouseOver",
+                "Enabled+Selected", "Focused+Pressed", "Focused+MouseOver",
+                "Editable+Enabled", "Editable+Focused", "Editable+Pressed", "Editable+MouseOver"
+        };
+        for (String s : enabledStates) {
+            UIManager.put("ComboBox[" + s + "].backgroundPainter", fieldFill);
+        }
+        UIManager.put("ComboBox[Disabled].backgroundPainter", disabledFill);
+        UIManager.put("ComboBox[Disabled+Editable].backgroundPainter", disabledFill);
+
+        String[] arrowStates = {"Enabled", "Pressed", "MouseOver", "Selected", "Enabled+Editable"};
+        for (String s : arrowStates) {
+            UIManager.put("ComboBox:\"ComboBox.arrowButton\"[" + s + "].backgroundPainter", arrowFill);
+            UIManager.put("ComboBox:\"ComboBox.arrowButton\"[" + s + "].foregroundPainter", arrowGlyph);
+        }
+        UIManager.put("ComboBox:\"ComboBox.arrowButton\"[Disabled].backgroundPainter", arrowFill);
+
+        UIManager.put("ComboBox.background", new ColorUIResource(INPUT));
+        UIManager.put("ComboBox.foreground", new ColorUIResource(TEXT));
+        UIManager.put("ComboBox:\"ComboBox.listRenderer\".background", new ColorUIResource(INPUT));
+        UIManager.put("ComboBox:\"ComboBox.listRenderer\".foreground", new ColorUIResource(TEXT));
     }
 
     /**
