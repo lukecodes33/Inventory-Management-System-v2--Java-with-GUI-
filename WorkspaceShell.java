@@ -69,13 +69,17 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
@@ -150,6 +154,11 @@ public final class WorkspaceShell {
     /** Thumbnail box in View Items card grid. */
     private static final int VIEW_ITEM_CARD_PHOTO_PX = 148;
     private static final int VIEW_ITEM_CARD_COLUMNS = 4;
+    private static final int VIEW_ITEMS_SEARCH_DEBOUNCE_MS = 200;
+
+    /** Cached View Items card thumbnails; {@link #VIEW_ITEM_THUMB_CACHE_MISS} marks a known-missing file. */
+    private static final ConcurrentHashMap<String, Object> viewItemThumbCache = new ConcurrentHashMap<>();
+    private static final Object VIEW_ITEM_THUMB_CACHE_MISS = new Object();
 
     /** {@link JPanel#getClientProperty(Object)} key for sidebar nav selection sync. */
     private static final String CLIENT_NAV_SIDEBAR_SELECTOR = "ims.NavSidebarSelector";
@@ -158,6 +167,21 @@ public final class WorkspaceShell {
     private static final String CLIENT_RECENT_REFRESHER = "ims.recentRefresher";
     private static final int DEFAULT_BACKUP_REMINDER_DAYS = 7;
     private static final int DEFAULT_STALE_MARKET_PRICE_DAYS = 90;
+    private static final double VIEW_ITEMS_HIGH_MARGIN_THRESHOLD_PCT = 20.0;
+    private static final String VIEW_ITEMS_FILTER_ALL = "All items";
+    private static final String VIEW_ITEMS_FILTER_FAVOURITES = "Favourites only";
+    private static final String VIEW_ITEMS_FILTER_LOW_STOCK = "Low stock";
+    private static final String VIEW_ITEMS_FILTER_STALE_PRICE = "Stale market price";
+    private static final String VIEW_ITEMS_FILTER_MISSING_PHOTO = "Missing photo";
+    private static final String VIEW_ITEMS_FILTER_HIGH_MARGIN = "High margin";
+    private static final String[] VIEW_ITEMS_FILTER_OPTIONS = {
+            VIEW_ITEMS_FILTER_ALL,
+            VIEW_ITEMS_FILTER_FAVOURITES,
+            VIEW_ITEMS_FILTER_LOW_STOCK,
+            VIEW_ITEMS_FILTER_STALE_PRICE,
+            VIEW_ITEMS_FILTER_MISSING_PHOTO,
+            VIEW_ITEMS_FILTER_HIGH_MARGIN
+    };
 
     /** CardLayout orphans prior components if the same sidebar key builds a new panel; we remove the old instance before re-adding. */
     private static final String CLIENT_WORKSPACE_CARD_REGISTRY = "ims.workspaceCardRegistry";
@@ -353,6 +377,92 @@ public final class WorkspaceShell {
             return v < 1 ? DEFAULT_STALE_MARKET_PRICE_DAYS : Math.min(v, 3650);
         } catch (NumberFormatException ex) {
             return DEFAULT_STALE_MARKET_PRICE_DAYS;
+        }
+    }
+
+    private static String favouriteItemsMetadataKey(String username) {
+        return "favourite_items:" + (username == null ? "" : username.trim().toLowerCase(Locale.ROOT));
+    }
+
+    private static Set<String> readFavouriteItemCodes(Connection connection, String username) throws SQLException {
+        String raw = DatabaseManager.getAppMetadata(connection, favouriteItemsMetadataKey(username));
+        Set<String> codes = new LinkedHashSet<>();
+        if (raw == null || raw.isBlank()) {
+            return codes;
+        }
+        for (String part : raw.split(",")) {
+            String code = part.trim();
+            if (!code.isEmpty()) {
+                codes.add(code);
+            }
+        }
+        return codes;
+    }
+
+    private static void writeFavouriteItemCodes(Connection connection, String username, Set<String> codes)
+            throws SQLException {
+        String value = String.join(",", codes);
+        DatabaseManager.putAppMetadata(connection, favouriteItemsMetadataKey(username), value);
+    }
+
+    private static boolean toggleFavouriteItem(Connection connection, String username, String itemCode)
+            throws SQLException {
+        String code = itemCode == null ? "" : itemCode.trim();
+        if (code.isEmpty()) {
+            return false;
+        }
+        Set<String> codes = readFavouriteItemCodes(connection, username);
+        boolean nowFavourite;
+        if (codes.remove(code)) {
+            nowFavourite = false;
+        } else {
+            codes.add(code);
+            nowFavourite = true;
+        }
+        writeFavouriteItemCodes(connection, username, codes);
+        return nowFavourite;
+    }
+
+    private static boolean viewItemHasReadablePhoto(String itemCode) {
+        return Files.isReadable(itemImagePath(itemCode));
+    }
+
+    private static boolean matchesViewItemsSmartFilter(
+            ViewItemShelfRow row,
+            String filter,
+            Set<String> favourites
+    ) {
+        if (VIEW_ITEMS_FILTER_FAVOURITES.equals(filter)) {
+            return favourites.contains(row.itemCode());
+        }
+        if (VIEW_ITEMS_FILTER_LOW_STOCK.equals(filter)) {
+            return row.reorderTrigger() > 0 && row.reorderTrigger() >= row.stock();
+        }
+        if (VIEW_ITEMS_FILTER_STALE_PRICE.equals(filter)) {
+            return row.staleMarketPrice();
+        }
+        if (VIEW_ITEMS_FILTER_MISSING_PHOTO.equals(filter)) {
+            return !row.hasPhoto();
+        }
+        if (VIEW_ITEMS_FILTER_HIGH_MARGIN.equals(filter)) {
+            return row.unrealizedMarginPercent() != null
+                    && row.unrealizedMarginPercent() >= VIEW_ITEMS_HIGH_MARGIN_THRESHOLD_PCT;
+        }
+        return true;
+    }
+
+    private static void sortViewItemsShelfRows(List<ViewItemShelfRow> rows, String filter, Set<String> favourites) {
+        if (VIEW_ITEMS_FILTER_ALL.equals(filter)) {
+            rows.sort((a, b) -> {
+                boolean fa = favourites.contains(a.itemCode());
+                boolean fb = favourites.contains(b.itemCode());
+                if (fa != fb) {
+                    return fa ? -1 : 1;
+                }
+                return a.itemCode().compareToIgnoreCase(b.itemCode());
+            });
+        } else {
+            rows.sort(Comparator.comparing(ViewItemShelfRow::itemCode, String.CASE_INSENSITIVE_ORDER));
         }
     }
 
@@ -1457,6 +1567,7 @@ public final class WorkspaceShell {
             items.add(new NavItem("Storage Locations", () -> buildStorageLocationsPanel(connection)));
         }
         items.add(new NavItem("Stock by Location", () -> buildStockByLocationPanel(user, connection)));
+        items.add(new NavItem("Quick Transfer", () -> buildQuickTransferPanel(user, connection)));
         items.add(new NavItem(VIEW_PO_TRACKING, () -> buildPurchaseOrdersPanel(user, connection, workspaceContainer)));
         if (admin) {
             items.add(new NavItem("Suppliers", () -> buildSuppliersPanel(user, connection)));
@@ -1857,6 +1968,7 @@ public final class WorkspaceShell {
                                 JOptionPane.INFORMATION_MESSAGE);
                         return;
                     }
+                    invalidateViewItemThumbCache(code);
                     updatePhotoRailImageLabel(imageLabel, code);
                     if (refreshViewItemsIfOpen != null) {
                         refreshViewItemsIfOpen.run();
@@ -2063,6 +2175,9 @@ public final class WorkspaceShell {
                                 + "\nFailed: " + result.failed(),
                         "Fetch photos",
                         result.failed() > 0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+                if (result.saved() > 0) {
+                    clearViewItemThumbCache();
+                }
                 AdminMetricsRailHost rail = adminMetricsRailHost;
                 if (rail != null) {
                     rail.refreshSelectedItemPhoto();
@@ -2120,6 +2235,40 @@ public final class WorkspaceShell {
         }
         ensureItemImagesDir();
         Files.copy(source, itemImagePath(itemCode), StandardCopyOption.REPLACE_EXISTING);
+        invalidateViewItemThumbCache(itemCode);
+    }
+
+    private static String viewItemThumbCacheKey(String itemCode, int boxPx) {
+        return itemCode + "\u0001" + boxPx;
+    }
+
+    private static void invalidateViewItemThumbCache(String itemCode) {
+        if (itemCode == null || itemCode.isBlank()) {
+            return;
+        }
+        String prefix = itemCode + "\u0001";
+        viewItemThumbCache.keySet().removeIf(k -> k.startsWith(prefix));
+    }
+
+    private static void clearViewItemThumbCache() {
+        viewItemThumbCache.clear();
+    }
+
+    /**
+     * Loads a View Items card thumbnail, using an in-memory cache (including negative hits for missing files).
+     */
+    private static ImageIcon loadCachedViewItemThumbIcon(String itemCode, int boxPx) {
+        String key = viewItemThumbCacheKey(itemCode, boxPx);
+        Object cached = viewItemThumbCache.get(key);
+        if (cached == VIEW_ITEM_THUMB_CACHE_MISS) {
+            return null;
+        }
+        if (cached instanceof ImageIcon icon) {
+            return icon;
+        }
+        ImageIcon loaded = loadScaledItemPhotoIcon(itemImagePath(itemCode), boxPx, boxPx);
+        viewItemThumbCache.put(key, loaded == null ? VIEW_ITEM_THUMB_CACHE_MISS : loaded);
+        return loaded;
     }
 
     /**
@@ -2310,7 +2459,8 @@ public final class WorkspaceShell {
             int reorderTrigger,
             Double marketPrice,
             Double unrealizedMarginPercent,
-            boolean staleMarketPrice
+            boolean staleMarketPrice,
+            boolean hasPhoto
     ) {
     }
 
@@ -2369,6 +2519,7 @@ public final class WorkspaceShell {
         centerWrap.add(intro, BorderLayout.NORTH);
 
         List<ViewItemShelfRow> allRows = loadViewItemShelfRows(connection);
+        Set<String> favouriteCodes = readFavouriteItemCodes(connection, user.getUsername());
         Object prefillSearch = workspaceContainer.getClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT);
         workspaceContainer.putClientProperty(CLIENT_VIEW_ITEMS_SEARCH_TEXT, null);
 
@@ -2378,11 +2529,16 @@ public final class WorkspaceShell {
             searchField.setText(s);
         }
 
+        JComboBox<String> smartFilter = new JComboBox<>(VIEW_ITEMS_FILTER_OPTIONS);
+        styleComboMatchInputRow(smartFilter);
+
         JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         AppUI.applyPanelBackground(filterRow);
         filterRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         filterRow.add(new JLabel("Search code or name"));
         filterRow.add(searchField);
+        filterRow.add(new JLabel("Filter"));
+        filterRow.add(smartFilter);
         final List<ViewItemShelfRow>[] filteredRowsHolder = new List[]{new ArrayList<>()};
         JButton exportCsv = new JButton("Export CSV");
         styleSecondaryButton(exportCsv);
@@ -2397,9 +2553,11 @@ public final class WorkspaceShell {
         JPanel gridHost = new JPanel(new BorderLayout());
         AppUI.applyPanelBackground(gridHost);
         final JPanel[] selectedCard = new JPanel[1];
+        final Runnable[] rebuildGridHolder = new Runnable[1];
 
         Runnable rebuildGrid = () -> {
             String q = searchField.getText().trim().toLowerCase(Locale.ROOT);
+            String filter = Objects.toString(smartFilter.getSelectedItem(), VIEW_ITEMS_FILTER_ALL);
             List<ViewItemShelfRow> filtered = new ArrayList<>();
             for (ViewItemShelfRow row : allRows) {
                 if (!q.isEmpty()) {
@@ -2409,8 +2567,12 @@ public final class WorkspaceShell {
                         continue;
                     }
                 }
+                if (!matchesViewItemsSmartFilter(row, filter, favouriteCodes)) {
+                    continue;
+                }
                 filtered.add(row);
             }
+            sortViewItemsShelfRows(filtered, filter, favouriteCodes);
             filteredRowsHolder[0] = new ArrayList<>(filtered);
             selectedCard[0] = null;
             gridHost.removeAll();
@@ -2418,13 +2580,25 @@ public final class WorkspaceShell {
                 gridHost.add(buildSectionText(
                         allRows.isEmpty()
                                 ? "No items with stock on hand or on order."
-                                : "No items match the current filter."), BorderLayout.CENTER);
+                                : "No items match the current search and filter."), BorderLayout.CENTER);
                 matchCount.setText(allRows.isEmpty() ? "" : "0 shown");
             } else {
                 JPanel scrollBody = new JPanel(new GridBagLayout());
                 scrollBody.setOpaque(true);
                 AppUI.applyPanelBackground(scrollBody);
-                populateViewItemsGrid(scrollBody, user, connection, workspaceContainer, filtered, selectedCard);
+                populateViewItemsGrid(
+                        scrollBody, user, connection, workspaceContainer, filtered, selectedCard,
+                        favouriteCodes,
+                        () -> {
+                            try {
+                                favouriteCodes.clear();
+                                favouriteCodes.addAll(readFavouriteItemCodes(connection, user.getUsername()));
+                            } catch (SQLException ex) {
+                                JOptionPane.showMessageDialog(panel, "Could not reload favourites: " + ex.getMessage(),
+                                        "View Items", JOptionPane.ERROR_MESSAGE);
+                            }
+                            rebuildGridHolder[0].run();
+                        });
                 JScrollPane scroll = new JScrollPane(scrollBody,
                         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                         JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -2438,24 +2612,36 @@ public final class WorkspaceShell {
             gridHost.revalidate();
             gridHost.repaint();
         };
+        rebuildGridHolder[0] = rebuildGrid;
+
+        Timer searchDebounceTimer = new Timer(VIEW_ITEMS_SEARCH_DEBOUNCE_MS, e -> rebuildGrid.run());
+        searchDebounceTimer.setRepeats(false);
 
         DocumentListener filterListener = new DocumentListener() {
+            private void schedule() {
+                searchDebounceTimer.restart();
+            }
+
             @Override
             public void insertUpdate(DocumentEvent e) {
-                rebuildGrid.run();
+                schedule();
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                rebuildGrid.run();
+                schedule();
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
-                rebuildGrid.run();
+                schedule();
             }
         };
         searchField.getDocument().addDocumentListener(filterListener);
+        smartFilter.addActionListener(e -> {
+            searchDebounceTimer.stop();
+            rebuildGrid.run();
+        });
 
         rebuildGrid.run();
         centerWrap.add(gridHost, BorderLayout.CENTER);
@@ -2474,8 +2660,17 @@ public final class WorkspaceShell {
                        i.`On Order`,
                        i.`ReOrder Trigger`,
                        i.`Market Price`,
-                       i.market_price_updated_at
+                       i.market_price_updated_at,
+                       fifo.avg_unit_cost
                 FROM inventory i
+                LEFT JOIN (
+                    SELECT item_code,
+                           SUM(CAST(qty_remaining AS REAL) * unit_cost)
+                               / SUM(CAST(qty_remaining AS REAL)) AS avg_unit_cost
+                    FROM inventory_cost_layers
+                    WHERE qty_remaining > 0
+                    GROUP BY item_code
+                ) fifo ON fifo.item_code = i.`Item Code`
                 WHERE i.`Stock` > 0 OR i.`On Order` > 0
                 ORDER BY i.`Item Code` ASC
                 """
@@ -2489,16 +2684,27 @@ public final class WorkspaceShell {
                     int reorder = rs.getInt("ReOrder Trigger");
                     double mp = rs.getDouble("Market Price");
                     Double market = rs.wasNull() ? null : mp;
-                    Double margin = InventoryFifo.unrealizedMarginPercent(connection, code);
+                    double avgRaw = rs.getDouble("avg_unit_cost");
+                    Double avgCost = rs.wasNull() ? null : avgRaw;
+                    Double margin = computeUnrealizedMarginPercent(avgCost, market);
                     String updatedAt = rs.getString("market_price_updated_at");
                     boolean stale = market == null
                             || (stock > 0 && (updatedAt == null || updatedAt.isBlank()
                             || sqlDaysSinceDisplayDate(updatedAt) > staleDays));
-                    rows.add(new ViewItemShelfRow(code, name, stock, onOrder, reorder, market, margin, stale));
+                    boolean hasPhoto = viewItemHasReadablePhoto(code);
+                    rows.add(new ViewItemShelfRow(
+                            code, name, stock, onOrder, reorder, market, margin, stale, hasPhoto));
                 }
             }
         }
         return rows;
+    }
+
+    private static Double computeUnrealizedMarginPercent(Double avgUnitCost, Double marketPrice) {
+        if (avgUnitCost == null || marketPrice == null || avgUnitCost <= 1e-12) {
+            return null;
+        }
+        return ((marketPrice - avgUnitCost) / avgUnitCost) * 100.0;
     }
 
     private static void populateViewItemsGrid(
@@ -2507,7 +2713,9 @@ public final class WorkspaceShell {
             Connection connection,
             JPanel workspaceContainer,
             List<ViewItemShelfRow> rows,
-            JPanel[] selectedCard
+            JPanel[] selectedCard,
+            Set<String> favouriteCodes,
+            Runnable onFavouritesChanged
     ) {
         int n = rows.size();
         final int cols = VIEW_ITEM_CARD_COLUMNS;
@@ -2529,7 +2737,7 @@ public final class WorkspaceShell {
                 JPanel slot = null;
                 if (idx < n) {
                     ViewItemShelfRow row = rows.get(idx);
-                    slot = buildViewItemShelfCard(user, connection, workspaceContainer, row, card -> {
+                    slot = buildViewItemShelfCard(user, connection, workspaceContainer, row, favouriteCodes, onFavouritesChanged, card -> {
                         if (selectedCard[0] != null && selectedCard[0] != card) {
                             styleViewItemShelfCard(selectedCard[0], false);
                         }
@@ -2567,6 +2775,8 @@ public final class WorkspaceShell {
             Connection connection,
             JPanel workspaceContainer,
             ViewItemShelfRow row,
+            Set<String> favouriteCodes,
+            Runnable onFavouritesChanged,
             Consumer<JPanel> onSelect
     ) {
         JPanel card = new JPanel();
@@ -2577,6 +2787,29 @@ public final class WorkspaceShell {
         card.setOpaque(true);
         card.setBackground(viewItemMarginTint(row.unrealizedMarginPercent()));
         styleViewItemShelfCard(card, false);
+
+        JPanel starRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        starRow.setOpaque(false);
+        starRow.setAlignmentX(Component.CENTER_ALIGNMENT);
+        starRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        boolean isFavourite = favouriteCodes.contains(row.itemCode());
+        JButton starBtn = new JButton(isFavourite ? "\u2605" : "\u2606");
+        starBtn.setToolTipText(isFavourite ? "Remove from favourites" : "Add to favourites");
+        starBtn.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 4));
+        starBtn.setFocusPainted(false);
+        starBtn.setContentAreaFilled(false);
+        starBtn.setForeground(isFavourite ? new Color(0xfbbf24) : AppUI.TEXT_MUTED);
+        starBtn.addActionListener(e -> {
+            try {
+                toggleFavouriteItem(connection, user.getUsername(), row.itemCode());
+                onFavouritesChanged.run();
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(card, "Could not update favourite: " + ex.getMessage(),
+                        "View Items", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        starRow.add(starBtn);
+        card.add(starRow);
 
         JComponent photo = buildViewItemPhotoThumb(row.itemCode(), VIEW_ITEM_CARD_PHOTO_PX);
         photo.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -2630,6 +2863,17 @@ public final class WorkspaceShell {
             }
         });
         menu.add(openLowStock);
+        JMenuItem toggleFav = new JMenuItem(isFavourite ? "Remove from favourites" : "Add to favourites");
+        toggleFav.addActionListener(e -> {
+            try {
+                toggleFavouriteItem(connection, user.getUsername(), row.itemCode());
+                onFavouritesChanged.run();
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(card, "Could not update favourite: " + ex.getMessage(),
+                        "View Items", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        menu.add(toggleFav);
 
         card.addMouseListener(new MouseAdapter() {
             private void maybeShowMenu(MouseEvent e) {
@@ -2641,6 +2885,9 @@ public final class WorkspaceShell {
 
             @Override
             public void mouseClicked(MouseEvent e) {
+                if (e.getSource() == starBtn) {
+                    return;
+                }
                 if (e.isPopupTrigger()) {
                     maybeShowMenu(e);
                     return;
@@ -2832,8 +3079,7 @@ public final class WorkspaceShell {
 
     /** JPEG thumbnail for View Items cards, or a bordered “?” placeholder when no image is saved. */
     private static JComponent buildViewItemPhotoThumb(String itemCode, int boxPx) {
-        Path p = itemImagePath(itemCode);
-        ImageIcon icon = loadScaledItemPhotoIcon(p, boxPx, boxPx);
+        ImageIcon icon = loadCachedViewItemThumbIcon(itemCode, boxPx);
         if (icon != null) {
             JLabel label = new JLabel(icon, SwingConstants.CENTER);
             label.setPreferredSize(new Dimension(boxPx, boxPx));
@@ -4166,6 +4412,75 @@ public final class WorkspaceShell {
         }
     }
 
+    /** Loads {@code Market Price} for a SKU, or {@code null} when missing or not set. */
+    private static Double queryInventoryMarketPrice(Connection connection, String rawCode) {
+        if (rawCode == null) {
+            return null;
+        }
+        String code = rawCode.trim();
+        if (code.isEmpty()) {
+            return null;
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT `Market Price` FROM inventory WHERE `Item Code` = ? LIMIT 1"
+        )) {
+            ps.setString(1, code);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                double v = rs.getDouble(1);
+                return rs.wasNull() ? null : v;
+            }
+        } catch (SQLException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * When unit sale price is still blank, pre-fills from market price as the item code is typed.
+     */
+    private static void wireSaleUnitPriceFromMarket(
+            Connection connection,
+            JTextField itemCodeField,
+            JTextField unitSalePriceField
+    ) {
+        DocumentListener dl = new DocumentListener() {
+            private void apply() {
+                SwingUtilities.invokeLater(() -> {
+                    String current = unitSalePriceField.getText();
+                    if (current != null && !current.trim().isEmpty()) {
+                        return;
+                    }
+                    String code = itemCodeField.getText().trim();
+                    if (code.isEmpty()) {
+                        return;
+                    }
+                    Double mp = queryInventoryMarketPrice(connection, code);
+                    if (mp != null) {
+                        unitSalePriceField.setText(String.format(Locale.US, "%.2f", mp));
+                    }
+                });
+            }
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                apply();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                apply();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                apply();
+            }
+        };
+        itemCodeField.getDocument().addDocumentListener(dl);
+    }
+
     /** Keeps a read-only description field in sync as the item code is edited. */
     private static void wireInventoryItemDescriptionLookup(Connection connection, JTextField itemCodeField, JTextField descriptionTarget) {
         descriptionTarget.setEditable(false);
@@ -4474,6 +4789,36 @@ public final class WorkspaceShell {
             }
         });
 
+        JButton receiveEntirePo = new JButton("Receive entire PO");
+        AppUI.stylePrimaryButton(receiveEntirePo);
+        receiveEntirePo.setToolTipText("Receive all remaining lines for the selected PO reference into one bin.");
+        receiveEntirePo.addActionListener(e -> {
+            String ref = "";
+            int vr = pendingTable.getSelectedRow();
+            if (vr >= 0) {
+                int mr = pendingTable.convertRowIndexToModel(vr);
+                ref = Objects.toString(pendingModel.getValueAt(mr, 7), "").trim();
+            }
+            if (ref.isEmpty()) {
+                ref = JOptionPane.showInputDialog(panel, "Enter PO reference to receive in full:", "Receive entire PO",
+                        JOptionPane.QUESTION_MESSAGE);
+                if (ref == null) {
+                    return;
+                }
+                ref = ref.trim();
+            }
+            if (ref.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "A PO reference is required.");
+                return;
+            }
+            try {
+                showReceiveEntirePoDialog(panel, user, connection, ref, reloadPendingEmbedded);
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Could not load PO lines: " + ex.getMessage(),
+                        "Receive entire PO", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
         JPanel centerBlock = new JPanel(new BorderLayout(8, 8));
         AppUI.applyPanelBackground(centerBlock);
         centerBlock.add(form, BorderLayout.NORTH);
@@ -4481,6 +4826,7 @@ public final class WorkspaceShell {
         JPanel pendingFooter = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         AppUI.applyPanelBackground(pendingFooter);
         pendingFooter.add(receiveThisLine);
+        pendingFooter.add(receiveEntirePo);
         centerBlock.add(pendingFooter, BorderLayout.SOUTH);
 
         panel.add(centerBlock, BorderLayout.CENTER);
@@ -6110,6 +6456,226 @@ public final class WorkspaceShell {
         return panel;
     }
 
+    /** Short bin-to-bin move flow starting from item code (same backend as Stock by Location). */
+    private static JPanel buildQuickTransferPanel(User user, Connection connection) throws SQLException {
+        DatabaseManager.ensureStorageLocationsAndBuckets(connection);
+        JPanel panel = buildFormPanel("Quick Transfer");
+        JPanel intro = buildSectionPanel();
+        intro.add(buildSectionText(
+                "Move quantity between bins without searching the full stock-by-location table. "
+                        + "Total stock on hand is unchanged — only shelf placement updates."));
+        panel.add(intro, BorderLayout.NORTH);
+
+        if (!DatabaseManager.hasInventoryStorageQtyTable(connection)) {
+            panel.add(buildSectionText("Storage tables are not available."), BorderLayout.CENTER);
+            return panel;
+        }
+
+        JPanel form = new JPanel(new GridBagLayout());
+        AppUI.applyPanelBackground(form);
+        GridBagConstraints gb = new GridBagConstraints();
+        gb.insets = new Insets(4, 0, 4, 10);
+
+        JTextField itemCode = new JTextField();
+        JTextField itemDesc = new JTextField();
+        JComboBox<StorageLocationPick> fromCombo = new JComboBox<>();
+        JComboBox<StorageLocationPick> toCombo = new JComboBox<>();
+        JTextField qtyField = new JTextField();
+        styleInput(itemCode, itemDesc, qtyField);
+        styleAutoFilledInventoryField(itemDesc);
+        styleComboMatchInputRow(fromCombo, toCombo);
+
+        int r = 0;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Item Code *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(itemCode, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Item Description"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(itemDesc, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("From bin *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(fromCombo, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("To bin *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(toCombo, gb);
+
+        r++;
+        gb.gridx = 0;
+        gb.gridy = r;
+        gb.anchor = GridBagConstraints.LINE_END;
+        gb.fill = GridBagConstraints.NONE;
+        gb.weightx = 0;
+        form.add(new JLabel("Quantity *"), gb);
+        gb.gridx = 1;
+        gb.anchor = GridBagConstraints.LINE_START;
+        gb.fill = GridBagConstraints.HORIZONTAL;
+        gb.weightx = 1;
+        form.add(qtyField, gb);
+
+        wireInventoryItemDescriptionLookup(connection, itemCode, itemDesc);
+
+        final int[] maxAtSource = {0};
+
+        Runnable reloadDestination = () -> {
+            StorageLocationPick from = (StorageLocationPick) fromCombo.getSelectedItem();
+            int fromId = from != null ? from.id : -1;
+            toCombo.removeAllItems();
+            if (fromId > 0) {
+                try {
+                    fillStorageLocationComboExcluding(toCombo, connection, fromId);
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(panel, "Could not load destination bins: " + ex.getMessage(),
+                            "Quick Transfer", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        };
+
+        Runnable reloadSourceBins = () -> {
+            String code = itemCode.getText().trim();
+            fromCombo.removeAllItems();
+            toCombo.removeAllItems();
+            maxAtSource[0] = 0;
+            qtyField.setText("");
+            if (code.isEmpty()) {
+                return;
+            }
+            try {
+                fillStorageLocationComboForItemBins(fromCombo, connection, code);
+                if (fromCombo.getItemCount() == 1) {
+                    fromCombo.setSelectedIndex(0);
+                    StorageLocationPick pick = (StorageLocationPick) fromCombo.getSelectedItem();
+                    if (pick != null) {
+                        maxAtSource[0] = pick.qtyAvailable;
+                        qtyField.setText(String.valueOf(maxAtSource[0]));
+                    }
+                    reloadDestination.run();
+                }
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Could not load source bins: " + ex.getMessage(),
+                        "Quick Transfer", JOptionPane.ERROR_MESSAGE);
+            }
+        };
+
+        DocumentListener codeListener = new DocumentListener() {
+            private void go() {
+                reloadSourceBins.run();
+            }
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                go();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                go();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                go();
+            }
+        };
+        itemCode.getDocument().addDocumentListener(codeListener);
+
+        fromCombo.addActionListener(e -> {
+            StorageLocationPick pick = (StorageLocationPick) fromCombo.getSelectedItem();
+            maxAtSource[0] = pick != null ? pick.qtyAvailable : 0;
+            if (maxAtSource[0] > 0) {
+                qtyField.setText(String.valueOf(maxAtSource[0]));
+            }
+            reloadDestination.run();
+        });
+
+        JButton transfer = new JButton("Transfer");
+        AppUI.stylePrimaryButton(transfer);
+        transfer.addActionListener(e -> {
+            String code = itemCode.getText().trim();
+            if (code.isEmpty()) {
+                JOptionPane.showMessageDialog(panel, "Item code is required.");
+                return;
+            }
+            StorageLocationPick from = (StorageLocationPick) fromCombo.getSelectedItem();
+            StorageLocationPick to = (StorageLocationPick) toCombo.getSelectedItem();
+            if (from == null || from.id <= 0) {
+                JOptionPane.showMessageDialog(panel, "Choose a source bin that holds this item.");
+                return;
+            }
+            if (to == null || to.id <= 0) {
+                JOptionPane.showMessageDialog(panel, "Choose a destination bin.");
+                return;
+            }
+            try {
+                int qty = Integer.parseInt(qtyField.getText().trim());
+                if (qty <= 0) {
+                    JOptionPane.showMessageDialog(panel, "Quantity must be greater than zero.");
+                    return;
+                }
+                if (qty > maxAtSource[0]) {
+                    JOptionPane.showMessageDialog(panel,
+                            "Source bin only has " + maxAtSource[0] + " units.");
+                    return;
+                }
+                moveInventoryBetweenStorageLocations(connection, user, code, from.id, to.id, qty);
+                JOptionPane.showMessageDialog(panel,
+                        "Moved " + qty + " from " + from.label + " to " + to.label + ".",
+                        "Quick Transfer", JOptionPane.INFORMATION_MESSAGE);
+                recordRecentItem(code, queryInventoryItemDescription(connection, code));
+                reloadSourceBins.run();
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(panel, "Enter a valid whole number for quantity.");
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(panel, "Could not transfer: " + ex.getMessage(),
+                        "Quick Transfer", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
+        JPanel center = new JPanel(new BorderLayout(0, 12));
+        AppUI.applyPanelBackground(center);
+        center.add(form, BorderLayout.NORTH);
+        panel.add(center, BorderLayout.CENTER);
+        panel.add(buildActionBar(null, transfer), BorderLayout.SOUTH);
+        return panel;
+    }
+
     private static void refreshStockReportLocationCombo(JComboBox<StorageLocationPick> combo, Connection connection) throws SQLException {
         Object prior = combo.getSelectedItem();
         int priorId = prior instanceof StorageLocationPick sp ? sp.id : STOCK_REPORT_ALL_LOCATIONS_ID;
@@ -6309,6 +6875,7 @@ public final class WorkspaceShell {
         rf++;
 
         wireInventoryItemDescriptionLookup(connection, itemCode, itemDesc);
+        wireSaleUnitPriceFromMarket(connection, itemCode, unitSalePrice);
 
         Map<String, SaleDraftLine> items = new LinkedHashMap<>();
         DefaultTableModel model = new DefaultTableModel(
@@ -6318,12 +6885,33 @@ public final class WorkspaceShell {
 
         JButton addLine = new JButton("Add Line");
         styleSecondaryButton(addLine);
+        JButton removeLine = new JButton("Remove selected");
+        styleSecondaryButton(removeLine);
+        JButton clearCart = new JButton("Clear cart");
+        styleSecondaryButton(clearCart);
         JButton submit = new JButton("Complete Sale");
         AppUI.stylePrimaryButton(submit);
+
+        JLabel cartSummary = new JLabel(" ");
+        cartSummary.setForeground(AppUI.TEXT_MUTED);
 
         JTextField transactionNote = new JTextField();
         styleInput(transactionNote);
         transactionNote.setToolTipText("Optional — one note for this entire sale (e.g. discount reason).");
+
+        Runnable refreshCartUi = () -> {
+            refreshSaleDraftTable(model, items, table);
+            int units = 0;
+            double total = 0;
+            for (SaleDraftLine line : items.values()) {
+                units += line.quantity;
+                total += line.quantity * line.unitSalePrice;
+            }
+            cartSummary.setText(items.isEmpty()
+                    ? "Cart is empty"
+                    : String.format(Locale.US, "%d lines, %d units, %s",
+                    items.size(), units, formatUsdMoney(total)));
+        };
 
         addLine.addActionListener(e -> {
             String code = itemCode.getText().trim();
@@ -6394,15 +6982,53 @@ public final class WorkspaceShell {
                 } else {
                     items.put(key, new SaleDraftLine(code, qty, unitPrice, nameForLine, locId, locLabel));
                 }
-                refreshSaleDraftTable(model, items, table);
+                refreshCartUi.run();
                 itemCode.setText("");
                 quantity.setText("");
                 unitSalePrice.setText("");
                 itemDesc.setText("");
+                itemCode.requestFocusInWindow();
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(panel, "Enter a valid quantity and unit sale price.");
             } catch (SQLException ex) {
                 JOptionPane.showMessageDialog(panel, "Database error: " + ex.getMessage());
+            }
+        });
+
+        removeLine.addActionListener(e -> {
+            int vr = table.getSelectedRow();
+            if (vr < 0) {
+                JOptionPane.showMessageDialog(panel, "Select a cart line to remove.");
+                return;
+            }
+            int mr = table.convertRowIndexToModel(vr);
+            String code = Objects.toString(model.getValueAt(mr, 0), "").trim();
+            String locLabel = Objects.toString(model.getValueAt(mr, 1), "").trim();
+            String keyToRemove = null;
+            for (Map.Entry<String, SaleDraftLine> entry : items.entrySet()) {
+                SaleDraftLine line = entry.getValue();
+                String label = line.storageLocationLabel.isEmpty() ? "—" : line.storageLocationLabel;
+                if (line.itemCode.equals(code) && label.equals(locLabel)) {
+                    keyToRemove = entry.getKey();
+                    break;
+                }
+            }
+            if (keyToRemove != null) {
+                items.remove(keyToRemove);
+                refreshCartUi.run();
+            }
+        });
+
+        clearCart.addActionListener(e -> {
+            if (items.isEmpty()) {
+                return;
+            }
+            int ok = JOptionPane.showConfirmDialog(panel, "Remove all lines from the cart?", "Clear cart",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (ok == JOptionPane.OK_OPTION) {
+                items.clear();
+                refreshCartUi.run();
+                itemCode.requestFocusInWindow();
             }
         });
 
@@ -6436,7 +7062,10 @@ public final class WorkspaceShell {
         AppUI.applyPanelBackground(upper);
         upper.add(hint, BorderLayout.NORTH);
         upper.add(form, BorderLayout.CENTER);
-        upper.add(buildActionBar(null, addLine), BorderLayout.SOUTH);
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        AppUI.applyPanelBackground(addRow);
+        addRow.add(addLine);
+        upper.add(addRow, BorderLayout.SOUTH);
 
         JPanel body = new JPanel(new BorderLayout(0, 12));
         AppUI.applyPanelBackground(body);
@@ -6444,6 +7073,14 @@ public final class WorkspaceShell {
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(AppUI.newRoundedBorder(8));
         body.add(tableScroll, BorderLayout.CENTER);
+        JPanel cartActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        AppUI.applyPanelBackground(cartActions);
+        cartActions.add(removeLine);
+        cartActions.add(clearCart);
+        cartActions.add(cartSummary);
+        body.add(cartActions, BorderLayout.SOUTH);
+
+        refreshCartUi.run();
 
         JPanel footer = new JPanel(new GridBagLayout());
         footer.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
@@ -6469,6 +7106,7 @@ public final class WorkspaceShell {
 
         panel.add(body, BorderLayout.CENTER);
         panel.add(footer, BorderLayout.SOUTH);
+        SwingUtilities.invokeLater(() -> itemCode.requestFocusInWindow());
         return panel;
     }
 
@@ -8668,15 +9306,21 @@ public final class WorkspaceShell {
     private static final class StorageLocationPick {
         final int id;
         final String label;
+        final int qtyAvailable;
 
         StorageLocationPick(int id, String label) {
+            this(id, label, 0);
+        }
+
+        StorageLocationPick(int id, String label, int qtyAvailable) {
             this.id = id;
             this.label = label;
+            this.qtyAvailable = qtyAvailable;
         }
 
         @Override
         public String toString() {
-            return label;
+            return qtyAvailable > 0 ? label + " (" + qtyAvailable + ")" : label;
         }
     }
 
@@ -8792,6 +9436,39 @@ public final class WorkspaceShell {
                     if (id != excludeLocationId) {
                         combo.addItem(new StorageLocationPick(id, rs.getString("name")));
                     }
+                }
+            }
+        }
+    }
+
+    /** Bins that currently hold positive quantity for one SKU (for Quick Transfer source picker). */
+    private static void fillStorageLocationComboForItemBins(
+            JComboBox<StorageLocationPick> combo,
+            Connection connection,
+            String itemCode
+    ) throws SQLException {
+        combo.removeAllItems();
+        if (!DatabaseManager.hasInventoryStorageQtyTable(connection)) {
+            return;
+        }
+        String code = itemCode == null ? "" : itemCode.trim();
+        if (code.isEmpty()) {
+            return;
+        }
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT sl.id, sl.name, isq.qty
+                FROM inventory_storage_qty isq
+                JOIN storage_locations sl ON sl.id = isq.location_id
+                WHERE isq.item_code = ? AND isq.qty > 0
+                ORDER BY sl.sort_order ASC, sl.name COLLATE NOCASE ASC
+                """)) {
+            ps.setString(1, code);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    combo.addItem(new StorageLocationPick(
+                            rs.getInt("id"),
+                            rs.getString("name"),
+                            rs.getInt("qty")));
                 }
             }
         }
@@ -8977,6 +9654,146 @@ public final class WorkspaceShell {
                 }
                 return 0;
             }
+        }
+    }
+
+    private record PendingReceiveLine(String itemCode, String itemName, int amount, double purchasePrice) {
+    }
+
+    private static List<PendingReceiveLine> loadPendingReceiveLinesForReference(
+            Connection connection,
+            String reference
+    ) throws SQLException {
+        List<PendingReceiveLine> lines = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT po.`Item Code`,
+                       COALESCE(inv.`Item Name`, '') AS iname,
+                       po.`Amount`,
+                       po.`Purchase Price`
+                FROM pendingOrders po
+                LEFT JOIN inventory inv ON inv.`Item Code` = po.`Item Code`
+                WHERE po.`Reference` = ? AND po.`Amount` > 0
+                ORDER BY po.`Item Code` ASC
+                """)) {
+            ps.setString(1, reference);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    lines.add(new PendingReceiveLine(
+                            rs.getString("Item Code"),
+                            rs.getString("iname"),
+                            rs.getInt("Amount"),
+                            rs.getDouble("Purchase Price")));
+                }
+            }
+        }
+        return lines;
+    }
+
+    private static void receiveEntirePurchaseOrder(
+            User user,
+            Connection connection,
+            String reference,
+            int storageLocationId,
+            List<PendingReceiveLine> lines
+    ) throws SQLException {
+        boolean saved = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            for (PendingReceiveLine line : lines) {
+                if (line.amount() > 0) {
+                    applyReceive(user, connection, reference, line.itemCode(), line.amount(), line.purchasePrice(),
+                            storageLocationId);
+                }
+            }
+            connection.commit();
+        } catch (SQLException ex) {
+            connection.rollback();
+            throw ex;
+        } finally {
+            connection.setAutoCommit(saved);
+        }
+    }
+
+    private static void showReceiveEntirePoDialog(
+            Component parent,
+            User user,
+            Connection connection,
+            String reference,
+            Runnable onSuccess
+    ) throws SQLException {
+        List<PendingReceiveLine> lines = loadPendingReceiveLinesForReference(connection, reference);
+        if (lines.isEmpty()) {
+            JOptionPane.showMessageDialog(parent,
+                    "No open lines remain for reference \"" + reference + "\".",
+                    "Receive entire PO", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        DefaultTableModel previewModel = new DefaultTableModel(
+                new String[]{"Item Code", "Item Name", "Qty to receive", "Unit cost"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        int totalUnits = 0;
+        for (PendingReceiveLine line : lines) {
+            previewModel.addRow(new Object[]{
+                    line.itemCode(),
+                    line.itemName(),
+                    line.amount(),
+                    formatUsdMoney(line.purchasePrice())
+            });
+            totalUnits += line.amount();
+        }
+        JTable previewTable = new JTable(previewModel);
+        installTableCopyMenu(previewTable);
+        JScrollPane previewScroll = new JScrollPane(previewTable);
+        previewScroll.setPreferredSize(new Dimension(520, Math.min(220, 28 + lines.size() * 22)));
+
+        JComboBox<StorageLocationPick> binCombo = new JComboBox<>();
+        refreshActiveStorageLocationCombo(binCombo, connection);
+        styleComboMatchInputRow(binCombo);
+
+        JPanel dialogBody = new JPanel(new BorderLayout(0, 10));
+        AppUI.applyPanelBackground(dialogBody);
+        dialogBody.add(buildSectionText(
+                "Receive all " + lines.size() + " open line(s) (" + totalUnits + " units) for reference "
+                        + reference + "."), BorderLayout.NORTH);
+        dialogBody.add(previewScroll, BorderLayout.CENTER);
+        JPanel binRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        AppUI.applyPanelBackground(binRow);
+        binRow.add(new JLabel("Receive into bin"));
+        binRow.add(binCombo);
+        dialogBody.add(binRow, BorderLayout.SOUTH);
+
+        int choice = JOptionPane.showConfirmDialog(
+                parent,
+                dialogBody,
+                "Receive entire PO",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
+        Object locSelection = binCombo.getSelectedItem();
+        StorageLocationPick locPick = locSelection instanceof StorageLocationPick lp ? lp : null;
+        int storageLocationId = locPick != null ? locPick.id : DatabaseManager.STORAGE_LOCATION_UNASSIGNED_ID;
+        try {
+            receiveEntirePurchaseOrder(user, connection, reference, storageLocationId, lines);
+            for (PendingReceiveLine line : lines) {
+                recordRecentItem(line.itemCode(), line.itemName());
+            }
+            requestMetricsRefresh();
+            JOptionPane.showMessageDialog(parent,
+                    "Received " + lines.size() + " line(s), " + totalUnits + " units for " + reference + ".",
+                    "Receive entire PO", JOptionPane.INFORMATION_MESSAGE);
+            if (onSuccess != null) {
+                onSuccess.run();
+            }
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(parent, "Database error: " + ex.getMessage(),
+                    "Receive entire PO", JOptionPane.ERROR_MESSAGE);
         }
     }
 
