@@ -7,10 +7,9 @@ import javax.swing.JPasswordField;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import java.awt.BorderLayout;
-import java.awt.Font;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Insets;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import java.awt.FlowLayout;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
@@ -32,61 +31,45 @@ public class LoginPopUp {
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         dialog.setLayout(new BorderLayout());
 
-        JPanel panel = new JPanel(new GridBagLayout());
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         AppUI.applyPanelBackground(panel);
-        panel.setBorder(BorderFactory.createEmptyBorder(22, 24, 22, 24));
-
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(8, 0, 8, 12);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.setBorder(BorderFactory.createEmptyBorder(28, 28, 28, 28));
 
         JLabel header = new JLabel("Sign In", SwingConstants.LEFT);
-        header.setFont(header.getFont().deriveFont(Font.BOLD, 20f));
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.gridwidth = 2;
-        gbc.weightx = 1.0;
-        panel.add(header, gbc);
-
-        JLabel userLabel = new JLabel("Username", SwingConstants.RIGHT);
-        userLabel.setForeground(AppUI.TEXT_MUTED);
-        gbc.gridy = 1;
-        gbc.gridwidth = 1;
-        gbc.weightx = 0;
-        gbc.gridx = 0;
-        gbc.anchor = GridBagConstraints.LINE_END;
-        panel.add(userLabel, gbc);
+        header.setFont(AppUI.fontPageTitle(22));
+        header.setForeground(AppUI.TEXT);
+        header.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        header.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        panel.add(header);
+        panel.add(Box.createVerticalStrut(6));
+        JLabel tagline = new JLabel("Know what's on the shelf");
+        tagline.setFont(AppUI.fontCaption(13));
+        tagline.setForeground(AppUI.TEXT_MUTED);
+        tagline.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        tagline.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        panel.add(tagline);
+        panel.add(Box.createVerticalStrut(20));
 
         JTextField userText = new JTextField(20);
         AppUI.applyInputField(userText);
-        gbc.gridx = 1;
-        gbc.anchor = GridBagConstraints.LINE_START;
-        gbc.weightx = 1.0;
-        panel.add(userText, gbc);
-
-        JLabel passwordLabel = new JLabel("Password", SwingConstants.RIGHT);
-        passwordLabel.setForeground(AppUI.TEXT_MUTED);
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.weightx = 0;
-        gbc.anchor = GridBagConstraints.LINE_END;
-        panel.add(passwordLabel, gbc);
+        AppUI.setPlaceholder(userText, "Username");
+        panel.add(AppUI.buildStackedField("Username", userText));
+        panel.add(Box.createVerticalStrut(12));
 
         JPasswordField passwordText = new JPasswordField(20);
         AppUI.applyPasswordField(passwordText);
-        gbc.gridx = 1;
-        gbc.anchor = GridBagConstraints.LINE_START;
-        gbc.weightx = 1.0;
-        panel.add(passwordText, gbc);
+        panel.add(AppUI.buildStackedField("Password", passwordText));
+        panel.add(Box.createVerticalStrut(18));
 
         JButton loginButton = new JButton("Sign In");
         AppUI.stylePrimaryButton(loginButton);
-        gbc.gridx = 1;
-        gbc.gridy = 3;
-        gbc.anchor = GridBagConstraints.EAST;
-        gbc.fill = GridBagConstraints.NONE;
-        gbc.insets = new Insets(16, 0, 0, 0);
-        panel.add(loginButton, gbc);
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        btnRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 44));
+        btnRow.add(loginButton);
+        panel.add(btnRow);
 
         if (AppUI.usesEmbeddedTitleBar()) {
             dialog.add(AppUI.createApplicationTitleBar("Inventory Management System"), BorderLayout.NORTH);

@@ -368,7 +368,6 @@ public final class PricingReorderPanel {
                         pricePs.setDouble(1, newPrice);
                         pricePs.setString(2, code);
                         pricePs.executeUpdate();
-                        InventoryAudit.touchMarketPriceUpdated(connection, code);
                         String beforeText = prior == null ? "null" : String.format(Locale.US, "%.4f", prior);
                         String afterText = String.format(Locale.US, "%.4f", newPrice);
                         InventoryAudit.logChange(connection, user.getUsername(), code,

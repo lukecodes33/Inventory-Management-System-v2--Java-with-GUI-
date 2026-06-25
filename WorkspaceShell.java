@@ -104,7 +104,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import javax.swing.JProgressBar;
 import javax.swing.JDialog;
+import java.awt.Container;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.imageio.ImageIO;
 
@@ -139,20 +141,33 @@ public final class WorkspaceShell {
     static final int ITEM_DESC_COLUMN_MAX_WIDTH = 560;
     /** On-disk JPEG per item: {@code item_images/<Item Code>.jpeg}. */
     static final Path ITEM_IMAGES_DIR = Paths.get("item_images");
-    /** Max width when downscaling item JPEGs for display (shared by rail, detail, and upload preview). */
+    /** Max width when downscaling item JPEGs for display (item detail dialog and upload preview). */
     static final int ITEM_PHOTO_DISPLAY_MAX_W = 420;
-    /** Max height when downscaling item JPEGs for display (shared by rail, detail, and upload preview). */
+    /** Max height when downscaling item JPEGs for display (item detail dialog and upload preview). */
     static final int ITEM_PHOTO_DISPLAY_MAX_H = 420;
+    /** Admin financials rail photo cap (~66% of {@link #ITEM_PHOTO_DISPLAY_MAX_W}). */
+    static final int ADMIN_RAIL_PHOTO_MAX_W = 277;
+    /** Shorter rail height so stats, notes, and actions stay visible below the photo. */
+    static final int ADMIN_RAIL_PHOTO_MAX_H = 168;
+    /** Default fraction of the item rail given to the photo block (remainder = stats/notes). */
+    static final double ADMIN_RAIL_PHOTO_SPLIT_WEIGHT = 0.40;
     /** Default frame height scale; width uses the same base percent then {@link #MAIN_FRAME_WIDTH_EXTRA_FACTOR}. */
     static final int MAIN_FRAME_BASE_W = 1180;
     static final int MAIN_FRAME_BASE_H = 760;
     static final int MAIN_FRAME_HEIGHT_SCALE_PERCENT = 125;
     /** Multiplies default width after height-scale (e.g. 1.25 → 25% wider than the height-scaled width). */
     static final double MAIN_FRAME_WIDTH_EXTRA_FACTOR = 1.25;
-    static final int SIDEBAR_TARGET_WIDTH = 300;
+    static final int SIDEBAR_TARGET_WIDTH = 280;
+    static final int RESPONSIVE_ADMIN_RAIL_MIN_WIDTH = 1100;
+    static final String CLIENT_SESSION_PAGE_TITLE = "ims.session.pageTitle";
+    static final String CLIENT_SESSION_PROGRESS = "ims.session.progress";
+    static final String CLIENT_ADMIN_RAIL_COLLAPSED = "ims.adminRail.collapsed";
+    static final String CLIENT_VIEW_ITEMS_COLUMNS = "ims.viewItems.columns";
     static final int WORKSPACE_MIN_WIDTH = 360;
-    /** Metrics / photo rail width (admin layout); fits {@link #ITEM_PHOTO_DISPLAY_MAX_W} plus padding. */
-    static final int ADMIN_METRICS_RAIL_OUTER_PX = 448;
+    /** Metrics / photo rail width when expanded (~66% of the original 448px). */
+    static final int ADMIN_METRICS_RAIL_OUTER_PX = 296;
+    /** Right-edge strip shown when the financials rail is collapsed. */
+    static final int ADMIN_RAIL_STRIP_PX = 44;
     static final int MAIN_AREA_MIN_FOR_METRICS = 420;
     /** Max length for {@code Inventory.Notes} (photo rail and Add Item). */
     static final int ITEM_NOTES_MAX_CHARS = 4000;
@@ -171,21 +186,13 @@ public final class WorkspaceShell {
     static final String CLIENT_VIEW_ITEMS_SEARCH_TEXT = "ims.viewItemsSearchText";
     static final String CLIENT_RECENT_REFRESHER = "ims.recentRefresher";
     static final int DEFAULT_BACKUP_REMINDER_DAYS = 7;
-    static final int DEFAULT_STALE_MARKET_PRICE_DAYS = 90;
-    static final double VIEW_ITEMS_HIGH_MARGIN_THRESHOLD_PCT = 20.0;
     static final String VIEW_ITEMS_FILTER_ALL = "All items";
     static final String VIEW_ITEMS_FILTER_FAVOURITES = "Favourites only";
     static final String VIEW_ITEMS_FILTER_LOW_STOCK = "Low stock";
-    static final String VIEW_ITEMS_FILTER_STALE_PRICE = "Stale market price";
-    static final String VIEW_ITEMS_FILTER_MISSING_PHOTO = "Missing photo";
-    static final String VIEW_ITEMS_FILTER_HIGH_MARGIN = "High margin";
     static final String[] VIEW_ITEMS_FILTER_OPTIONS = {
             VIEW_ITEMS_FILTER_ALL,
             VIEW_ITEMS_FILTER_FAVOURITES,
-            VIEW_ITEMS_FILTER_LOW_STOCK,
-            VIEW_ITEMS_FILTER_STALE_PRICE,
-            VIEW_ITEMS_FILTER_MISSING_PHOTO,
-            VIEW_ITEMS_FILTER_HIGH_MARGIN
+            VIEW_ITEMS_FILTER_LOW_STOCK
     };
 
     /** CardLayout orphans prior components if the same sidebar key builds a new panel; we remove the old instance before re-adding. */
@@ -277,46 +284,128 @@ public final class WorkspaceShell {
             JPanel workspaceContainer,
             AccountActions accountActions
     ) {
-        JPanel bar = new JPanel(new BorderLayout());
+        JPanel bar = new JPanel(new BorderLayout(16, 0));
         bar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER),
-                BorderFactory.createEmptyBorder(10, 18, 10, 18)));
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER_SOFT),
+                BorderFactory.createEmptyBorder(10, 20, 10, 20)));
         AppUI.applyPanelBackground(bar);
 
-        JLabel brand = new JLabel(user.getUsername(), SwingConstants.CENTER);
-        Font base = brand.getFont();
-        brand.setFont(base.deriveFont(Font.BOLD, 16f));
-        brand.setForeground(AppUI.TEXT);
-        bar.add(brand, BorderLayout.CENTER);
+        JPanel west = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        west.setOpaque(false);
+        String initial = user.getUsername().isEmpty() ? "?" : user.getUsername().substring(0, 1).toUpperCase(Locale.ROOT);
+        JLabel avatar = new JLabel(initial, SwingConstants.CENTER) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(AppUI.PRIMARY);
+                g2.fillOval(0, 0, getWidth(), getHeight());
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        avatar.setPreferredSize(new Dimension(34, 34));
+        avatar.setFont(AppUI.fontSemiBold(14));
+        avatar.setForeground(AppUI.PRIMARY_TEXT);
+        avatar.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        west.add(avatar);
 
-        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 14, 0));
-        AppUI.applyPanelBackground(east);
+        JPanel userBlock = new JPanel();
+        userBlock.setLayout(new BoxLayout(userBlock, BoxLayout.Y_AXIS));
+        userBlock.setOpaque(false);
+        JLabel userName = new JLabel(user.getUsername());
+        userName.setFont(AppUI.fontSemiBold(14));
+        userName.setForeground(AppUI.TEXT);
+        userName.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        JLabel roleLine = new JLabel(user.hasAdminRights() ? "Administrator" : "Standard user");
+        roleLine.setFont(AppUI.fontCaption(11));
+        roleLine.setForeground(AppUI.TEXT_MUTED);
+        roleLine.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        userBlock.add(userName);
+        userBlock.add(roleLine);
+        west.add(userBlock);
+        bar.add(west, BorderLayout.WEST);
+
+        JLabel pageTitle = new JLabel("View Items", SwingConstants.CENTER);
+        pageTitle.setFont(AppUI.fontPageTitle(18));
+        pageTitle.setForeground(AppUI.TEXT);
+        pageTitle.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        bar.putClientProperty(CLIENT_SESSION_PAGE_TITLE, pageTitle);
+        bar.add(pageTitle, BorderLayout.CENTER);
+
+        JPanel east = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 0));
         east.setOpaque(false);
         if (user.hasAdminRights()) {
-            try {
-                int reminderDays = readBackupReminderDays(connection);
-                int since = accountActions.daysSinceLatestBackup();
-                if (since < 0 || since > reminderDays) {
-                    String backupText = since < 0 ? "No backups found" : "Backup " + since + "d ago";
-                    JButton backupLink = new JButton(backupText);
-                    backupLink.setBorderPainted(false);
-                    backupLink.setContentAreaFilled(false);
-                    backupLink.setFocusPainted(false);
-                    backupLink.setForeground(SETUP_FG);
-                    backupLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                    backupLink.addActionListener(e -> showView(workspaceContainer, VIEW_ADMIN_TOOLS,
-                            AdministrationToolsPanel.build(user, connection, frame, accountActions)));
-                    east.add(backupLink);
-                }
-            } catch (SQLException | IOException ignored) {
-                // Omit backup chip when status cannot be loaded.
+            JLabel roleBadge = AppUI.createBadge("Admin", AppUI.INFO_BG, AppUI.PRIMARY);
+            east.add(roleBadge);
+        }
+        JLabel cmdHint = new JLabel("\u2318K");
+        cmdHint.setFont(AppUI.fontCaption(12));
+        cmdHint.setForeground(AppUI.TEXT_MUTED);
+        cmdHint.setToolTipText("Command palette");
+        cmdHint.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        east.add(cmdHint);
+
+        JProgressBar progress = new JProgressBar();
+        progress.setIndeterminate(false);
+        progress.setVisible(false);
+        progress.setPreferredSize(new Dimension(120, 8));
+        progress.setBorderPainted(false);
+        progress.setForeground(AppUI.PRIMARY);
+        progress.setBackground(AppUI.SURFACE_ELEVATED);
+        bar.putClientProperty(CLIENT_SESSION_PROGRESS, progress);
+        east.add(progress);
+
+        bar.add(east, BorderLayout.EAST);
+        return bar;
+    }
+
+    static void setSessionProgress(JFrame frame, boolean visible, boolean indeterminate) {
+        if (frame == null) {
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            Component[] roots = frame.getContentPane().getComponents();
+            for (Component c : roots) {
+                findSessionProgress(c, visible, indeterminate);
+            }
+        });
+    }
+
+    private static void findSessionProgress(Component c, boolean visible, boolean indeterminate) {
+        if (c instanceof JPanel p && p.getClientProperty(CLIENT_SESSION_PROGRESS) instanceof JProgressBar bar) {
+            bar.setVisible(visible);
+            bar.setIndeterminate(indeterminate);
+            if (!visible) {
+                bar.setValue(0);
+            }
+            p.revalidate();
+            return;
+        }
+        if (c instanceof Container cont) {
+            for (Component child : cont.getComponents()) {
+                findSessionProgress(child, visible, indeterminate);
             }
         }
-        if (east.getComponentCount() > 0) {
-            bar.add(east, BorderLayout.EAST);
-        }
+    }
 
-        return bar;
+    static void updateSessionPageTitle(JFrame frame, String title) {
+        if (frame == null || title == null) {
+            return;
+        }
+        SwingUtilities.invokeLater(() -> findSessionTitle(frame.getContentPane(), title));
+    }
+
+    private static void findSessionTitle(Component c, String title) {
+        if (c instanceof JPanel p && p.getClientProperty(CLIENT_SESSION_PAGE_TITLE) instanceof JLabel label) {
+            label.setText(title);
+            return;
+        }
+        if (c instanceof java.awt.Container cont) {
+            for (Component child : cont.getComponents()) {
+                findSessionTitle(child, title);
+            }
+        }
     }
 
     static final Color SETUP_FG = new Color(0xfbbf24);
@@ -418,7 +507,7 @@ public final class WorkspaceShell {
     }
 
     static boolean isLowStockSku(int stock, int reorderTrigger) {
-        return reorderTrigger > 0 && reorderTrigger >= stock;
+        return reorderTrigger >= stock;
     }
 
     static int parseMetadataInt(String raw, int fallback) {
@@ -447,13 +536,9 @@ public final class WorkspaceShell {
             } else {
                 sidebarSplit.setDividerLocation(sidebar);
             }
-            if (adminTripleSplit != null) {
-                int rail = parseMetadataInt(
-                        DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER),
-                        -1);
-                if (rail > 0 && adminTripleSplit.getWidth() > 0) {
-                    adminTripleSplit.setDividerLocation(rail);
-                }
+            if (adminTripleSplit != null
+                    && adminTripleSplit.getRightComponent() instanceof JPanel adminRailShell) {
+                restoreAdminRailLayout(connection, adminTripleSplit, adminRailShell);
             }
             if (photoSplit != null) {
                 int photoDiv = parseMetadataInt(
@@ -461,6 +546,8 @@ public final class WorkspaceShell {
                         -1);
                 if (photoDiv > 0) {
                     photoSplit.setDividerLocation(photoDiv);
+                } else {
+                    photoSplit.setDividerLocation(ADMIN_RAIL_PHOTO_SPLIT_WEIGHT);
                 }
             }
         } catch (SQLException ignored) {
@@ -830,13 +917,39 @@ public final class WorkspaceShell {
             return;
         }
         int div = splitPane.getDividerSize();
-        int loc = Math.min(SIDEBAR_TARGET_WIDTH, w - WORKSPACE_MIN_WIDTH - div);
-        loc = Math.max(160, loc);
+        int loc = Math.min(SIDEBAR_TARGET_WIDTH, Math.max(160, w - WORKSPACE_MIN_WIDTH - div));
         splitPane.setDividerLocation(loc);
     }
 
-    /** Keeps the admin metrics rail ~fixed width so the main block stretches with the window. */
-    static void syncAdminMetricsSplit(JSplitPane triplePane) {
+    static boolean isAdminRailCollapsed(JPanel shell) {
+        return Boolean.TRUE.equals(shell.getClientProperty(CLIENT_ADMIN_RAIL_COLLAPSED));
+    }
+
+    static void showAdminRailCard(JPanel shell, boolean collapsed) {
+        CardLayout cards = (CardLayout) shell.getLayout();
+        cards.show(shell, collapsed ? "collapsed" : "expanded");
+    }
+
+    static void setAdminRailCollapsed(JSplitPane triplePane, JPanel shell, boolean collapsed) {
+        shell.putClientProperty(CLIENT_ADMIN_RAIL_COLLAPSED, collapsed);
+        showAdminRailCard(shell, collapsed);
+        int w = triplePane.getWidth();
+        if (w > 0) {
+            int div = triplePane.getDividerSize();
+            if (collapsed) {
+                triplePane.setDividerLocation(w - div - ADMIN_RAIL_STRIP_PX);
+            } else {
+                applyAdminRailExpandedDivider(triplePane);
+            }
+        }
+        shell.revalidate();
+    }
+
+    static void toggleAdminRailCollapsed(JSplitPane triplePane, JPanel shell) {
+        setAdminRailCollapsed(triplePane, shell, !isAdminRailCollapsed(shell));
+    }
+
+    static void applyAdminRailExpandedDivider(JSplitPane triplePane) {
         int w = triplePane.getWidth();
         if (w <= 0) {
             return;
@@ -851,6 +964,124 @@ public final class WorkspaceShell {
             loc = Math.min(loc, maxLeft);
         }
         triplePane.setDividerLocation(loc);
+    }
+
+    static void restoreAdminRailLayout(Connection connection, JSplitPane triplePane, JPanel shell) {
+        int rail = -1;
+        try {
+            rail = parseMetadataInt(
+                    DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER),
+                    -1);
+        } catch (SQLException ignored) {
+            // default collapsed
+        }
+        boolean collapsed = true;
+        int w = triplePane.getWidth();
+        if (rail > 0 && w > 0) {
+            int rightWidth = w - rail - triplePane.getDividerSize();
+            collapsed = rightWidth <= ADMIN_RAIL_STRIP_PX + 24;
+        }
+        shell.putClientProperty(CLIENT_ADMIN_RAIL_COLLAPSED, collapsed);
+        showAdminRailCard(shell, collapsed);
+        if (w > 0) {
+            if (collapsed) {
+                triplePane.setDividerLocation(w - triplePane.getDividerSize() - ADMIN_RAIL_STRIP_PX);
+            } else if (rail > 0) {
+                triplePane.setDividerLocation(rail);
+            } else {
+                applyAdminRailExpandedDivider(triplePane);
+            }
+        }
+    }
+
+    /** Collapsible shell for the admin financials / item-photo rail. */
+    static JPanel buildAdminRailShell(JSplitPane[] tripleHolder, JComponent railContent) {
+        JPanel shell = new JPanel(new CardLayout());
+        AppUI.applyPanelBackground(shell);
+        shell.putClientProperty(CLIENT_ADMIN_RAIL_COLLAPSED, Boolean.TRUE);
+        shell.setMinimumSize(new Dimension(ADMIN_RAIL_STRIP_PX, 0));
+
+        JPanel collapsedStrip = new JPanel(new GridBagLayout());
+        collapsedStrip.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, AppUI.BORDER));
+        AppUI.applyPanelBackground(collapsedStrip);
+        JButton expandBtn = new JButton("\u00BB");
+        expandBtn.setFont(AppUI.fontBody(14));
+        AppUI.styleSecondaryButton(expandBtn);
+        expandBtn.setPreferredSize(new Dimension(32, 32));
+        expandBtn.setToolTipText("Show financials panel");
+        expandBtn.addActionListener(e -> {
+            JSplitPane triple = tripleHolder[0];
+            if (triple != null) {
+                setAdminRailCollapsed(triple, shell, false);
+            }
+        });
+
+        JPanel expanded = new JPanel(new BorderLayout());
+        AppUI.applyPanelBackground(expanded);
+        JPanel header = new JPanel(new BorderLayout(8, 0));
+        AppUI.applyPanelBackground(header);
+        header.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppUI.BORDER_SOFT),
+                BorderFactory.createEmptyBorder(8, 12, 8, 10)));
+        JLabel title = new JLabel("Financials");
+        title.setFont(AppUI.fontSemiBold(13));
+        title.setForeground(AppUI.TEXT);
+        title.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        JButton collapseBtn = new JButton("\u00AB");
+        collapseBtn.setFont(AppUI.fontBody(14));
+        AppUI.styleSecondaryButton(collapseBtn);
+        collapseBtn.setPreferredSize(new Dimension(36, 32));
+        collapseBtn.setToolTipText("Hide financials panel");
+        collapseBtn.addActionListener(e -> {
+            JSplitPane triple = tripleHolder[0];
+            if (triple != null) {
+                setAdminRailCollapsed(triple, shell, true);
+            }
+        });
+        header.add(title, BorderLayout.WEST);
+        header.add(collapseBtn, BorderLayout.EAST);
+        expanded.add(header, BorderLayout.NORTH);
+        expanded.add(railContent, BorderLayout.CENTER);
+
+        shell.add(collapsedStrip, "collapsed");
+        collapsedStrip.add(expandBtn);
+        shell.add(expanded, "expanded");
+        showAdminRailCard(shell, true);
+        return shell;
+    }
+
+    /** Keeps the admin metrics rail ~fixed width so the main block stretches with the window. */
+    static void syncAdminMetricsSplit(JSplitPane triplePane) {
+        Component right = triplePane.getRightComponent();
+        if (right instanceof JPanel shell && isAdminRailCollapsed(shell)) {
+            int w = triplePane.getWidth();
+            if (w > 0) {
+                triplePane.setDividerLocation(w - triplePane.getDividerSize() - ADMIN_RAIL_STRIP_PX);
+            }
+            return;
+        }
+        applyAdminRailExpandedDivider(triplePane);
+    }
+
+    /** Hides admin metrics rail when the window is narrower than {@link #RESPONSIVE_ADMIN_RAIL_MIN_WIDTH}. */
+    static void applyResponsiveAdminRail(JFrame frame, JSplitPane triplePane) {
+        if (frame == null || triplePane == null) {
+            return;
+        }
+        int w = frame.getWidth();
+        if (w <= 0) {
+            return;
+        }
+        Component right = triplePane.getRightComponent();
+        if (right instanceof JPanel shell && isAdminRailCollapsed(shell)) {
+            triplePane.setDividerLocation(w - triplePane.getDividerSize() - ADMIN_RAIL_STRIP_PX);
+            return;
+        }
+        if (w < RESPONSIVE_ADMIN_RAIL_MIN_WIDTH) {
+            triplePane.setDividerLocation(w - triplePane.getDividerSize() - 4);
+        } else {
+            syncAdminMetricsSplit(triplePane);
+        }
     }
 
     /**
@@ -1174,6 +1405,8 @@ public final class WorkspaceShell {
         splitPane.setBorder(null);
         splitPane.setOpaque(true);
         splitPane.setBackground(AppUI.BACKGROUND);
+        splitPane.setDividerSize(5);
+        sidebar.putClientProperty("ims.sidebar.split", splitPane);
 
         java.awt.Component center;
         final JSplitPane[] adminMetricsTripleHolder = new JSplitPane[1];
@@ -1205,14 +1438,15 @@ public final class WorkspaceShell {
             photoRailScroll.setBorder(AppUI.lineBorder());
             photoRailScroll.getVerticalScrollBar().setUnitIncrement(16);
             photoRailScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-            photoRailScroll.setPreferredSize(new Dimension(ITEM_PHOTO_DISPLAY_MAX_W + 16, ITEM_PHOTO_DISPLAY_MAX_H + 16));
+            photoRailScroll.setPreferredSize(new Dimension(ADMIN_RAIL_PHOTO_MAX_W + 16, ADMIN_RAIL_PHOTO_MAX_H + 12));
+            photoRailScroll.setMaximumSize(new Dimension(ADMIN_RAIL_PHOTO_MAX_W + 16, ADMIN_RAIL_PHOTO_MAX_H + 48));
 
             JTextArea photoRailStats = new JTextArea();
             photoRailStats.setEditable(false);
             photoRailStats.setOpaque(false);
             photoRailStats.setLineWrap(true);
             photoRailStats.setWrapStyleWord(true);
-            photoRailStats.setRows(8);
+            photoRailStats.setRows(6);
             photoRailStats.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
             photoRailStats.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
             photoRailStats.setForeground(AppUI.TEXT);
@@ -1233,6 +1467,7 @@ public final class WorkspaceShell {
 
             JLabel photoRailNotesHeading = new JLabel("Notes");
             photoRailNotesHeading.setFont(photoRailNotesHeading.getFont().deriveFont(Font.BOLD, 12f));
+            photoRailNotesHeading.setForeground(AppUI.TEXT);
 
             JButton railUpdateNote = new JButton("Update note");
             JButton railUpdateImage = new JButton("Update image");
@@ -1277,17 +1512,20 @@ public final class WorkspaceShell {
             photoRailTop.add(photoRailScroll, BorderLayout.CENTER);
             photoRailTop.add(photoRailPhotoActions, BorderLayout.SOUTH);
             JSplitPane photoRailSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, photoRailTop, photoRailLower);
-            photoRailSplit.setResizeWeight(0.66);
+            photoRailSplit.setResizeWeight(ADMIN_RAIL_PHOTO_SPLIT_WEIGHT);
             photoRailSplit.setContinuousLayout(true);
             photoRailSplit.setBorder(null);
             photoRailSplit.setDividerSize(5);
             photoRailSplit.setName(DatabaseManager.META_WORKSPACE_PHOTO_SPLIT_DIVIDER);
             photoSplitHolder[0] = photoRailSplit;
-            SwingUtilities.invokeLater(() -> photoRailSplit.setDividerLocation(0.66));
+            SwingUtilities.invokeLater(() -> photoRailSplit.setDividerLocation(ADMIN_RAIL_PHOTO_SPLIT_WEIGHT));
 
             photoRailCard.add(photoRailTitle, BorderLayout.NORTH);
             photoRailCard.add(photoRailSplit, BorderLayout.CENTER);
             metricsRailHost.add(photoRailCard, "photo");
+
+            JPanel adminRailShell = buildAdminRailShell(adminMetricsTripleHolder, metricsRailHost);
+
             adminMetricsRailHost = new AdminMetricsRailHost(
                     connection,
                     user.getUsername(),
@@ -1303,13 +1541,13 @@ public final class WorkspaceShell {
                     railNextWebPhoto,
                     () -> refreshViewItemsIfOpen(workspaceContainer, user, connection, frame));
 
-            final JSplitPane triplePane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, splitPane, metricsRailHost);
+            final JSplitPane triplePane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, splitPane, adminRailShell);
             triplePane.setResizeWeight(1.0);
             triplePane.setBorder(null);
             triplePane.setContinuousLayout(true);
             triplePane.setName(DatabaseManager.META_WORKSPACE_ADMIN_RAIL_DIVIDER);
-            center = triplePane;
             adminMetricsTripleHolder[0] = triplePane;
+            center = triplePane;
         } else {
             activeMetricsStrip = null;
             adminMetricsRailHost = null;
@@ -1375,6 +1613,7 @@ public final class WorkspaceShell {
                     JSplitPane outer = adminMetricsTripleHolder[0];
                     if (outer != null) {
                         syncAdminMetricsSplit(outer);
+                        applyResponsiveAdminRail(frame, outer);
                     }
                     syncSidebarWorkspaceSplit(splitPane);
                 });
@@ -1386,7 +1625,6 @@ public final class WorkspaceShell {
         AppUI.styleWindow(frame);
         refreshActiveMetricsStripNow();
         frame.setVisible(true);
-        maybeShowBackupReminderDialog(user, connection, frame, accountActions);
         SwingUtilities.invokeLater(() -> {
             restoreWorkspaceLayout(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0]);
             JSplitPane outer = adminMetricsTripleHolder[0];
@@ -1418,57 +1656,88 @@ public final class WorkspaceShell {
     ) {
         JPanel container = new JPanel(new BorderLayout());
         AppUI.applyPanelBackground(container);
-        container.setBorder(BorderFactory.createEmptyBorder(14, 12, 14, 12));
-
-        JLabel title = new JLabel("Please select a function:", SwingConstants.LEFT);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 18f));
+        container.setBorder(BorderFactory.createEmptyBorder(14, 10, 14, 10));
 
         JPanel header = new JPanel();
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
         AppUI.applyPanelBackground(header);
-        header.add(title);
-        header.add(Box.createVerticalStrut(16));
+
+        JPanel titleRow = new JPanel(new BorderLayout());
+        titleRow.setOpaque(false);
+        JLabel title = new JLabel("Workspace");
+        title.setFont(AppUI.fontTitle(16));
+        title.setForeground(AppUI.TEXT);
+        title.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        titleRow.add(title, BorderLayout.WEST);
+        header.add(titleRow);
+        header.add(Box.createVerticalStrut(4));
+        JLabel subtitle = new JLabel("Inventory \u00b7 Sales \u00b7 Admin");
+        subtitle.setFont(AppUI.fontCaption(11));
+        subtitle.setForeground(AppUI.TEXT_MUTED);
+        subtitle.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(subtitle);
+        header.add(Box.createVerticalStrut(14));
 
         JPanel nav = new JPanel();
         nav.setLayout(new BoxLayout(nav, BoxLayout.Y_AXIS));
         AppUI.applyPanelBackground(nav);
 
-        int betweenNavButtons = user.hasAdminRights() ? 5 : 8;
-
         NavSidebarSelector navSelector = new NavSidebarSelector();
         workspaceContainer.putClientProperty(CLIENT_NAV_SIDEBAR_SELECTOR, navSelector);
 
-        for (NavItem item : getItems(user, connection, accountActions, frame, workspaceContainer)) {
-            JButton button = new JButton(item.label);
-            button.setAlignmentX(Component.LEFT_ALIGNMENT);
-            button.setMaximumSize(new Dimension(Integer.MAX_VALUE, AppUI.CONTROL_HEIGHT + 6));
-            button.setHorizontalAlignment(SwingConstants.LEFT);
-            button.setFocusPainted(false);
-            button.setOpaque(true);
-            button.setContentAreaFilled(true);
-            if (item.viewBuilder != null) {
-                navSelector.registerNavViewButton(item.label, button);
-            } else {
-                applyNavButtonDefaultStyle(button);
-            }
-            button.addActionListener(e -> {
+        List<NavItem> allItems = getItems(user, connection, accountActions, frame, workspaceContainer);
+        LinkedHashMap<String, List<NavItem>> groups = new LinkedHashMap<>();
+        for (NavItem item : allItems) {
+            groups.computeIfAbsent(item.group, g -> new ArrayList<>()).add(item);
+        }
+
+        for (Map.Entry<String, List<NavItem>> entry : groups.entrySet()) {
+            JLabel section = new JLabel(entry.getKey().toUpperCase(Locale.ROOT));
+            section.setFont(AppUI.fontCaption(10));
+            section.setForeground(AppUI.TEXT_MUTED);
+            section.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+            section.setAlignmentX(Component.LEFT_ALIGNMENT);
+            section.putClientProperty("ims.nav.section", Boolean.TRUE);
+            nav.add(section);
+            nav.add(Box.createVerticalStrut(6));
+
+            for (NavItem item : entry.getValue()) {
+                JButton button = new JButton(item.label);
+                button.putClientProperty("ims.nav.fullLabel", item.label);
+                button.setAlignmentX(Component.LEFT_ALIGNMENT);
+                button.setMaximumSize(new Dimension(Integer.MAX_VALUE, AppUI.CONTROL_HEIGHT + 8));
+                button.setHorizontalAlignment(SwingConstants.LEFT);
+                button.setFocusPainted(false);
+                button.setOpaque(true);
+                button.setContentAreaFilled(true);
                 if (item.viewBuilder != null) {
-                    try {
-                        showView(workspaceContainer, item.label, item.viewBuilder.build());
-                    } catch (SQLException ex) {
-                        JOptionPane.showMessageDialog(frame, "Unable to open view: " + ex.getMessage(), "View Error", JOptionPane.ERROR_MESSAGE);
-                    }
-                    return;
+                    navSelector.registerNavViewButton(item.label, button);
+                } else {
+                    applyNavButtonDefaultStyle(button);
                 }
-                new Thread(() -> runAction(item.action), "ims-action-" + item.label.replace(" ", "-")).start();
-            });
-            nav.add(button);
-            nav.add(Box.createVerticalStrut(betweenNavButtons));
+                button.addActionListener(e -> {
+                    if (item.viewBuilder != null) {
+                        try {
+                            showView(workspaceContainer, item.label, item.viewBuilder.build());
+                        } catch (SQLException ex) {
+                            JOptionPane.showMessageDialog(frame, "Unable to open view: " + ex.getMessage(),
+                                    "View Error", JOptionPane.ERROR_MESSAGE);
+                        }
+                        return;
+                    }
+                    new Thread(() -> runAction(item.action), "ims-action-" + item.label.replace(" ", "-")).start();
+                });
+                nav.add(button);
+                nav.add(Box.createVerticalStrut(5));
+            }
+            nav.add(Box.createVerticalStrut(8));
         }
 
         JScrollPane scrollPane = new JScrollPane(nav);
         scrollPane.setBorder(null);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        AppUI.styleScrollPane(scrollPane);
 
         JPanel recentBlock = new JPanel();
         recentBlock.setLayout(new BoxLayout(recentBlock, BoxLayout.Y_AXIS));
@@ -1556,36 +1825,36 @@ public final class WorkspaceShell {
         boolean admin = user.hasAdminRights();
 
         if (admin) {
-            items.add(new NavItem("Add Item", () -> AddItemPanel.build(user, connection, workspaceContainer, frame)));
-            items.add(new NavItem("Storage Locations", () -> StorageLocationsPanel.build(connection)));
-            items.add(new NavItem("View Items", () -> ViewItemsPanel.build(user, connection, frame, workspaceContainer)));
+            items.add(new NavItem("Inventory", "Add Item", () -> AddItemPanel.build(user, connection, workspaceContainer, frame)));
+            items.add(new NavItem("Inventory", "Storage Locations", () -> StorageLocationsPanel.build(connection)));
+            items.add(new NavItem("Inventory", "View Items", () -> ViewItemsPanel.build(user, connection, frame, workspaceContainer)));
         } else {
-            items.add(new NavItem("View Items", () -> ViewItemsPanel.build(user, connection, frame, workspaceContainer)));
-            items.add(new NavItem("Storage Locations", () -> StorageLocationsPanel.build(connection)));
+            items.add(new NavItem("Inventory", "View Items", () -> ViewItemsPanel.build(user, connection, frame, workspaceContainer)));
+            items.add(new NavItem("Inventory", "Storage Locations", () -> StorageLocationsPanel.build(connection)));
         }
-        items.add(new NavItem("Stock by Location", () -> StockByLocationPanel.build(user, connection)));
-        items.add(new NavItem("Quick Transfer", () -> QuickTransferPanel.build(user, connection)));
-        items.add(new NavItem(VIEW_PO_TRACKING, () -> PurchaseOrdersPanel.build(user, connection, workspaceContainer)));
+        items.add(new NavItem("Inventory", "Stock by Location", () -> StockByLocationPanel.build(user, connection)));
+        items.add(new NavItem("Inventory", "Quick Transfer", () -> QuickTransferPanel.build(user, connection)));
+        items.add(new NavItem("Purchasing", VIEW_PO_TRACKING, () -> PurchaseOrdersPanel.build(user, connection, workspaceContainer)));
         if (admin) {
-            items.add(new NavItem("Suppliers", () -> SuppliersPanel.build(user, connection)));
+            items.add(new NavItem("Purchasing", "Suppliers", () -> SuppliersPanel.build(user, connection)));
         }
-        items.add(new NavItem("Receive Order", () -> ReceiveOrderPanel.build(user, connection, workspaceContainer)));
+        items.add(new NavItem("Purchasing", "Receive Order", () -> ReceiveOrderPanel.build(user, connection, workspaceContainer)));
         if (!admin) {
-            items.add(new NavItem("Low Stock Check", () -> LowStockPanel.build(connection)));
+            items.add(new NavItem("Sales", "Low Stock Check", () -> LowStockPanel.build(connection)));
         }
-        items.add(new NavItem("Process Sale", () -> ProcessSalePanel.build(user, connection, workspaceContainer)));
-        items.add(new NavItem("View Sales Transaction", () -> SalesPanel.build(user, connection, workspaceContainer)));
+        items.add(new NavItem("Sales", "Process Sale", () -> ProcessSalePanel.build(user, connection, workspaceContainer)));
+        items.add(new NavItem("Sales", "View Sales Transaction", () -> SalesPanel.build(user, connection, workspaceContainer)));
         if (admin) {
-            items.add(new NavItem("Write Off Stock", () -> WriteOffPanel.build(user, connection)));
-            items.add(new NavItem("Pricing & Reorder", () -> PricingReorderPanel.build(user, connection, workspaceContainer)));
-            items.add(new NavItem("Low Stock Check", () -> LowStockPanel.build(connection)));
-            items.add(new NavItem("Generate Reports", () -> ReportsPanel.build(user, connection)));
-            items.add(new NavItem(VIEW_ADMIN_TOOLS, () -> AdministrationToolsPanel.build(user, connection, frame, accountActions)));
+            items.add(new NavItem("Administration", "Write Off Stock", () -> WriteOffPanel.build(user, connection)));
+            items.add(new NavItem("Administration", "Pricing & Reorder", () -> PricingReorderPanel.build(user, connection, workspaceContainer)));
+            items.add(new NavItem("Administration", "Low Stock Check", () -> LowStockPanel.build(connection)));
+            items.add(new NavItem("Administration", "Generate Reports", () -> ReportsPanel.build(user, connection)));
+            items.add(new NavItem("Administration", VIEW_ADMIN_TOOLS, () -> AdministrationToolsPanel.build(user, connection, frame, accountActions)));
         }
         if (!admin) {
-            items.add(new NavItem("Reset Password", () -> ResetPasswordPanel.build(user, frame, accountActions)));
+            items.add(new NavItem("Account", "Reset Password", () -> ResetPasswordPanel.build(user, frame, accountActions)));
         }
-        items.add(new NavItem("Log Out", frame::dispose));
+        items.add(new NavItem("Account", "Log Out", frame::dispose));
         return items;
     }
 
@@ -1618,8 +1887,9 @@ public final class WorkspaceShell {
         if (prior != null && prior.getParent() == workspaceContainer) {
             workspaceContainer.remove(prior);
         }
-        cards.put(key, panel);
-        workspaceContainer.add(panel, key);
+        JPanel shown = UiTransition.wrapFadeIn(panel);
+        cards.put(key, shown);
+        workspaceContainer.add(shown, key);
         CardLayout layout = (CardLayout) workspaceContainer.getLayout();
         layout.show(workspaceContainer, key);
         workspaceContainer.revalidate();
@@ -1627,6 +1897,10 @@ public final class WorkspaceShell {
         Object selector = workspaceContainer.getClientProperty(CLIENT_NAV_SIDEBAR_SELECTOR);
         if (selector instanceof NavSidebarSelector navSidebarSelector) {
             navSidebarSelector.setSelectedCardKey(key);
+        }
+        Window w = SwingUtilities.getWindowAncestor(workspaceContainer);
+        if (w instanceof JFrame frame) {
+            updateSessionPageTitle(frame, key);
         }
         if (!"View Items".equals(key)) {
             restoreMetricsRailToDefault();
@@ -1642,12 +1916,10 @@ public final class WorkspaceShell {
         }
     }
 
-    /** Default (unselected) sidebar navigation button styling. */
     static void applyNavButtonDefaultStyle(JButton button) {
         AppUI.styleNavButton(button, false);
     }
 
-    /** Highlights the active sidebar workspace card tab. */
     static void applyNavButtonSelectedStyle(JButton button) {
         AppUI.styleNavButton(button, true);
     }
@@ -1795,6 +2067,7 @@ public final class WorkspaceShell {
         private void applyNotesViewerStyle() {
             notesArea.setEditable(false);
             notesArea.setOpaque(false);
+            notesArea.setForeground(AppUI.TEXT);
             notesArea.setBackground(host.getBackground());
         }
 
@@ -1807,6 +2080,7 @@ public final class WorkspaceShell {
             btnCancelNote.setVisible(true);
             notesArea.setEditable(true);
             notesArea.setOpaque(true);
+            notesArea.setForeground(AppUI.TEXT);
             notesArea.setBackground(AppUI.INPUT);
             notesArea.requestFocusInWindow();
         }
@@ -2005,13 +2279,13 @@ public final class WorkspaceShell {
             }
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("Current Stock:\n").append(stock).append("\n\n");
+        sb.append("Current Stock:\n").append(stock);
+        if (isLowStockSku(stock, reorderTrigger)) {
+            sb.append("  (low stock)");
+        }
+        sb.append("\n\n");
         if (reorderTrigger > 0) {
-            sb.append("Reorder trigger:\n").append(reorderTrigger);
-            if (isLowStockSku(stock, reorderTrigger)) {
-                sb.append("  (low stock)");
-            }
-            sb.append("\n\n");
+            sb.append("Reorder trigger:\n").append(reorderTrigger).append("\n\n");
         }
         sb.append("Stored at:\n").append(buildItemStorageLocationsText(connection, itemCode)).append("\n");
         Double fifoUnitCost = InventoryFifo.weightedAverageFifoUnitCost(connection, itemCode);
@@ -2094,7 +2368,7 @@ public final class WorkspaceShell {
     /** Refreshes JPEG preview on an image label for the rail. */
     static void updatePhotoRailImageLabel(JLabel imageLabel, String itemCode) {
         Path p = itemImagePath(itemCode);
-        ImageIcon icon = loadScaledItemPhotoIcon(p, ITEM_PHOTO_DISPLAY_MAX_W, ITEM_PHOTO_DISPLAY_MAX_H);
+        ImageIcon icon = loadScaledItemPhotoIcon(p, ADMIN_RAIL_PHOTO_MAX_W, ADMIN_RAIL_PHOTO_MAX_H);
         if (icon != null) {
             imageLabel.setIcon(icon);
             imageLabel.setText(null);
@@ -2127,18 +2401,15 @@ public final class WorkspaceShell {
             ensureAdmin(user, "Fetch item photos");
         }
         Window window = parent instanceof Window w ? w : SwingUtilities.getWindowAncestor(parent);
-        if (window != null) {
-            window.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-        }
+        JFrame frameRef = window instanceof JFrame jf ? jf : null;
+        setSessionProgress(frameRef, true, true);
         new Thread(() -> {
             ItemPhotoFetcher.FetchResult result;
             try {
                 result = ItemPhotoFetcher.fetchAll(replaceExisting);
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
-                    if (window != null) {
-                        window.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-                    }
+                    setSessionProgress(frameRef, false, false);
                     JOptionPane.showMessageDialog(
                             parent,
                             "Photo fetch failed:\n" + ex.getMessage(),
@@ -2148,16 +2419,10 @@ public final class WorkspaceShell {
                 return;
             }
             SwingUtilities.invokeLater(() -> {
-                if (window != null) {
-                    window.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-                }
-                JOptionPane.showMessageDialog(
-                        parent,
-                        "Photos saved: " + result.saved()
-                                + "\nSkipped (already on file): " + result.skipped()
-                                + "\nFailed: " + result.failed(),
-                        "Fetch photos",
-                        result.failed() > 0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+                setSessionProgress(frameRef, false, false);
+                ToastManager.showSuccess("Photos saved: " + result.saved()
+                        + " · skipped: " + result.skipped()
+                        + " · failed: " + result.failed());
                 if (result.saved() > 0) {
                     clearViewItemThumbCache();
                 }
@@ -2308,6 +2573,7 @@ public final class WorkspaceShell {
         JLabel l = new JLabel(label, SwingConstants.RIGHT);
         l.setFont(l.getFont().deriveFont(Font.BOLD));
         l.setForeground(AppUI.TEXT_MUTED);
+        l.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
         l.setMinimumSize(new Dimension(FORM_LABEL_MIN_WIDTH, 22));
         grid.add(l, gbc);
         gbc.gridx = 1;
@@ -2315,6 +2581,8 @@ public final class WorkspaceShell {
         gbc.weightx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         JLabel v = new JLabel(value == null ? "" : value);
+        v.setForeground(AppUI.TEXT);
+        v.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
         grid.add(v, gbc);
     }
 
@@ -2376,7 +2644,6 @@ public final class WorkspaceShell {
         photoLabel.setForeground(AppUI.TEXT_MUTED);
 
         JPanel fields = new JPanel(new GridBagLayout());
-        AppUI.applyPanelBackground(fields);
         addDetailFieldRow(fields, "Item code:", itemCode);
         addDetailFieldRow(fields, "Item name:", itemName == null ? "" : itemName);
         addDetailFieldRow(fields, "Supplier:", supplier == null || supplier.isEmpty() ? "—" : supplier);
@@ -2396,7 +2663,9 @@ public final class WorkspaceShell {
                 photoLabel.setText(null);
             } else {
                 photoLabel.setIcon(null);
-                photoLabel.setText("<html><center>No photo on file.<br>JPEG path: <code>item_images/" + itemCode + ".jpeg</code></center></html>");
+                photoLabel.setText("<html><body style='color:#a1a1a1;text-align:center'>"
+                        + "No photo on file.<br>JPEG path: <code>item_images/" + itemCode + ".jpeg</code>"
+                        + "</body></html>");
             }
         };
 
@@ -2507,7 +2776,7 @@ public final class WorkspaceShell {
             JComponent supplementalSouth
     ) throws SQLException {
         JPanel panel = new JPanel(new BorderLayout(12, 12));
-        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        panel.setBorder(BorderFactory.createEmptyBorder(28, 28, 28, 28));
         AppUI.applyPanelBackground(panel);
 
         JLabel heading = buildSectionTitle(title);
@@ -2515,6 +2784,7 @@ public final class WorkspaceShell {
 
         DefaultTableModel model = new DefaultTableModel(columns, 0);
         JTable table = new JTable(model);
+        AppUI.polishTable(table);
         installTableCopyMenu(table);
         TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(model);
         table.setRowSorter(sorter);
@@ -2585,6 +2855,7 @@ public final class WorkspaceShell {
             for (int i = 0; i < columns.length; i++) {
                 JTextField filter = new JTextField();
                 styleInput(filter);
+                AppUI.setPlaceholder(filter, "Filter " + columns[i] + "\u2026");
                 bottomFilters[i] = filter;
                 filter.addCaretListener(e -> applyCombinedRowFilter.run());
                 filterPanel.add(filter);
@@ -2592,7 +2863,7 @@ public final class WorkspaceShell {
         }
 
         JScrollPane tableScroll = new JScrollPane(table);
-        tableScroll.setBorder(AppUI.newRoundedBorder(8));
+        AppUI.styleScrollPane(tableScroll);
         JPanel tableStack = new JPanel(new BorderLayout(0, 0));
         AppUI.applyPanelBackground(tableStack);
         tableStack.add(tableScroll, BorderLayout.CENTER);
@@ -2963,23 +3234,16 @@ public final class WorkspaceShell {
     }
 
     /**
-     * Bottom-of-frame marquee driven by {@link DatabaseManager#META_PROFIT_ALERT_GOAL_PCT} and banner disabled flag.
+     * Bottom-of-frame profit alert strip (static, dismissible).
      */
     static final class ProfitAlertMarqueeBanner extends JPanel {
         static final Color SETUP_BG = new Color(0x2a2418);
         static final Color SETUP_FG = new Color(0xfbbf24);
-        static final Color SETUP_BORDER = new Color(0xb45309);
         static final Color PROFIT_BG = new Color(0x0f2419);
         static final Color PROFIT_FG = AppUI.SUCCESS;
-        static final Color PROFIT_BORDER = new Color(0x059669);
-
-        private final AlertMarqueeStripe setupStripe;
-        private final AlertMarqueeStripe profitStripe;
 
         ProfitAlertMarqueeBanner() {
             setLayout(new BorderLayout());
-            setupStripe = new AlertMarqueeStripe(SETUP_BG, SETUP_FG, SETUP_BORDER);
-            profitStripe = new AlertMarqueeStripe(PROFIT_BG, PROFIT_FG, PROFIT_BORDER);
         }
 
         @Override
@@ -2988,13 +3252,10 @@ public final class WorkspaceShell {
         }
 
         void stopTimer() {
-            setupStripe.stopTimer();
-            profitStripe.stopTimer();
+            // No marquee timer in static banner mode.
         }
 
         void refreshFromDatabase(Connection connection) {
-            setupStripe.stopTimer();
-            profitStripe.stopTimer();
             removeAll();
             setLayout(new BorderLayout());
             try {
@@ -3014,33 +3275,61 @@ public final class WorkspaceShell {
                     }
                 }
                 boolean profitOk = profitGoal >= 0 && profitGoal <= 10_000_000;
-                final AlertMarqueeStripe activeStripe;
+                Color bg = profitOk ? PROFIT_BG : SETUP_BG;
+                Color fg = profitOk ? PROFIT_FG : SETUP_FG;
+                String message;
                 if (!profitOk) {
-                    add(setupStripe, BorderLayout.CENTER);
-                    setupStripe.prepareMarquee(PROFIT_ALERT_BANNER_SETUP_MESSAGE);
-                    activeStripe = setupStripe;
+                    message = PROFIT_ALERT_BANNER_SETUP_MESSAGE;
                 } else {
                     List<String> plabels = profitAlertQualifyingItemLabels(connection, profitGoal);
-                    String profitMsg = "Goal of " + profitGoal + "% profit on the following items: "
-                            + profitAlertItemListPhrase(plabels);
-                    add(profitStripe, BorderLayout.CENTER);
-                    profitStripe.prepareMarquee(profitMsg);
-                    activeStripe = profitStripe;
+                    message = "Profit goal " + profitGoal + "% met for: " + profitAlertItemListPhrase(plabels);
                 }
+                add(buildAlertRow(connection, bg, fg, message), BorderLayout.CENTER);
                 setVisible(true);
                 revalidate();
                 repaint();
-                SwingUtilities.invokeLater(activeStripe::startTimerIfShowing);
             } catch (SQLException ex) {
-                removeAll();
-                setLayout(new BorderLayout());
-                add(setupStripe, BorderLayout.CENTER);
-                setupStripe.prepareMarquee("Profit alert: could not load data.");
+                add(buildAlertRow(connection, SETUP_BG, SETUP_FG, "Profit alert: could not load data."),
+                        BorderLayout.CENTER);
                 setVisible(true);
                 revalidate();
                 repaint();
-                SwingUtilities.invokeLater(setupStripe::startTimerIfShowing);
             }
+        }
+
+        private JPanel buildAlertRow(Connection connection, Color bg, Color fg, String message) {
+            JPanel row = new JPanel(new BorderLayout(12, 0));
+            row.setOpaque(true);
+            row.setBackground(bg);
+            row.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(1, 0, 0, 0, AppUI.BORDER_SOFT),
+                    BorderFactory.createEmptyBorder(10, 16, 10, 12)));
+
+            JLabel dot = new JLabel("\u25cf");
+            dot.setForeground(fg);
+            dot.setFont(AppUI.fontBody(14));
+            dot.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+            row.add(dot, BorderLayout.WEST);
+
+            JLabel text = new JLabel(message);
+            text.setFont(AppUI.fontBody(13));
+            text.setForeground(fg);
+            text.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+            row.add(text, BorderLayout.CENTER);
+
+            JButton dismiss = new JButton("\u00d7");
+            dismiss.setBorderPainted(false);
+            dismiss.setContentAreaFilled(false);
+            dismiss.setFocusPainted(false);
+            dismiss.setForeground(fg);
+            dismiss.setToolTipText("Dismiss until next session");
+            dismiss.addActionListener(e -> {
+                setVisible(false);
+                revalidate();
+                repaint();
+            });
+            row.add(dismiss, BorderLayout.EAST);
+            return row;
         }
     }
 
@@ -3134,36 +3423,43 @@ public final class WorkspaceShell {
                 displayDateTime.substring(10);
     }
 
-    static int sqlDaysSinceDisplayDate(String displayDateTime) {
-        if (displayDateTime == null || displayDateTime.length() < 10) {
-            return Integer.MAX_VALUE;
-        }
-        try {
-            LocalDate d = LocalDate.parse(
-                    displayDateTime.substring(6, 10) + "-"
-                            + displayDateTime.substring(3, 5) + "-"
-                            + displayDateTime.substring(0, 2));
-            return (int) Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(d, LocalDate.now()));
-        } catch (RuntimeException ex) {
-            return Integer.MAX_VALUE;
-        }
-    }
-
-
     /** Sanitizes filename tokens for export-safe output paths. */
     static String sanitizeFileName(String input) {
         return input.replaceAll("[^a-zA-Z0-9._-]", "_");
     }
 
 
-    /** Creates a standard form container panel with section heading. */
+    /** Creates a standard form container panel with page header (title + optional subtitle). */
     static JPanel buildFormPanel(String title) {
+        return buildFormPanel(title, null);
+    }
+
+    static JPanel buildFormPanel(String title, String subtitle) {
         JPanel panel = new JPanel(new BorderLayout(12, 12));
-        panel.setBorder(BorderFactory.createEmptyBorder(22, 22, 22, 22));
+        panel.setBorder(BorderFactory.createEmptyBorder(28, 28, 28, 28));
         AppUI.applyPanelBackground(panel);
-        JLabel heading = buildSectionTitle(title);
-        panel.add(heading, BorderLayout.NORTH);
+        panel.add(buildPageHeader(title, subtitle), BorderLayout.NORTH);
         return panel;
+    }
+
+    /** Consistent page header: title, optional muted subtitle, breathing room below. */
+    static JPanel buildPageHeader(String title, String subtitle) {
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setOpaque(false);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel heading = new JLabel(title, SwingConstants.LEFT);
+        heading.setFont(AppUI.fontPageTitle(22));
+        heading.setForeground(AppUI.TEXT);
+        heading.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
+        heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(heading);
+        if (subtitle != null && !subtitle.isBlank()) {
+            header.add(Box.createVerticalStrut(6));
+            header.add(buildSectionText(subtitle));
+        }
+        header.add(Box.createVerticalStrut(12));
+        return header;
     }
 
     /** Creates a vertically stacked section panel for form content. */
@@ -3178,7 +3474,8 @@ public final class WorkspaceShell {
     /** Creates a section title label with consistent heading style. */
     static JLabel buildSectionTitle(String text) {
         JLabel heading = new JLabel(text, SwingConstants.LEFT);
-        heading.setFont(heading.getFont().deriveFont(Font.BOLD, 21f));
+        heading.setFont(AppUI.fontTitle(16));
+        heading.putClientProperty(AppUI.CLIENT_PRESERVE_FOREGROUND, Boolean.TRUE);
         return heading;
     }
 
@@ -3201,7 +3498,7 @@ public final class WorkspaceShell {
             label = new JLabel(body, SwingConstants.LEFT);
             label.setForeground(AppUI.TEXT_MUTED);
         }
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
+        label.setFont(AppUI.fontBody(13));
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
@@ -4021,19 +4318,20 @@ public final class WorkspaceShell {
 
     /** Sidebar entry that either opens a lazily-built panel view or invokes a modal action thread. */
     static final class NavItem {
+        private final String group;
         private final String label;
         private final CheckedAction action;
         private final ViewBuilder viewBuilder;
 
-        /** Sidebar button that launches a background {@link CheckedAction} (logout, seeded runners, etc.). */
-        private NavItem(String label, CheckedAction action) {
+        private NavItem(String group, String label, CheckedAction action) {
+            this.group = group;
             this.label = label;
             this.action = action;
             this.viewBuilder = null;
         }
 
-        /** Sidebar button whose click shows a synchronous SQL-backed panel ({@link #build}). */
-        private NavItem(String label, ViewBuilder viewBuilder) {
+        private NavItem(String group, String label, ViewBuilder viewBuilder) {
+            this.group = group;
             this.label = label;
             this.action = () -> {};
             this.viewBuilder = viewBuilder;

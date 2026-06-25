@@ -101,13 +101,4 @@ public final class InventoryAudit {
             String createdAt
     ) {
     }
-
-    public static void touchMarketPriceUpdated(Connection connection, String itemCode) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "UPDATE inventory SET market_price_updated_at = ? WHERE `Item Code` = ?")) {
-            ps.setString(1, dateTime.nowDisplayString());
-            ps.setString(2, itemCode);
-            ps.executeUpdate();
-        }
-    }
 }

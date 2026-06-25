@@ -59,6 +59,16 @@ public final class ProcessSalePanel {
         JTextField unitSalePrice = new JTextField();
         JComboBox<WorkspaceShell.StorageLocationPick> saleLocationCombo = new JComboBox<>();
         WorkspaceShell.styleInput(itemCode, itemDesc, quantity, unitSalePrice);
+        AppUI.setPlaceholder(itemCode, "Scan or type item code\u2026");
+        AppUI.setPlaceholder(quantity, "Whole number");
+        AppUI.setPlaceholder(unitSalePrice, "Leave blank to use market price");
+        AppUI.attachFieldValidator(quantity, s -> {
+            try {
+                return !s.isBlank() && Integer.parseInt(s.trim()) > 0;
+            } catch (NumberFormatException ex) {
+                return false;
+            }
+        }, "Enter a positive whole number");
         WorkspaceShell.styleAutoFilledInventoryField(itemDesc);
         if (trackBins) {
             WorkspaceShell.refreshActiveStorageLocationCombo(saleLocationCombo, connection);
