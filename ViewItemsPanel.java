@@ -1,57 +1,36 @@
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.Window;
-import java.awt.event.FocusAdapter;
-import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
-import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JFileChooser;
@@ -60,31 +39,19 @@ import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPasswordField;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
-import javax.swing.RowFilter;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import javax.swing.table.DefaultTableModel;
-import javax.swing.table.TableColumn;
-import javax.swing.table.TableModel;
-import javax.swing.table.TableRowSorter;
 
-
-/** Extracted from WorkspaceShell. */
 public final class ViewItemsPanel {
     private ViewItemsPanel() {}
 
-        /** One row in the View Items card shelf (stock or on-order must be &gt; 0). */
+    /** One row in the View Items card shelf (stock or on-order must be &gt; 0). */
     record ViewItemShelfRow(
             String itemCode,
             String itemName,
@@ -98,7 +65,7 @@ public final class ViewItemsPanel {
     ) {
     }
 
-        /**
+    /**
      * Builds the View Items shelf: card grid for SKUs with stock on hand or units on order.
      * Each card shows the item JPEG (or a placeholder), code, stock, on-order qty, and market price.
      * Administrators: clicking a card swaps the right rail to that item's photo and stats.
@@ -413,7 +380,7 @@ public final class ViewItemsPanel {
         scrollBody.add(spacer, glue);
     }
 
-        /** One View Items card: photo (or placeholder), code, stock, on order, market price. */
+    /** One View Items card: photo (or placeholder), code, stock, on order, market price. */
     static JPanel buildViewItemShelfCard(
             User user,
             Connection connection,
@@ -721,7 +688,7 @@ public final class ViewItemsPanel {
         return "\"" + v + "\"";
     }
 
-        /** JPEG thumbnail for View Items cards, or a bordered “?” placeholder when no image is saved. */
+    /** JPEG thumbnail for View Items cards, or a bordered “?” placeholder when no image is saved. */
     static JComponent buildViewItemPhotoThumb(String itemCode, int boxPx) {
         ImageIcon icon = WorkspaceShell.loadCachedViewItemThumbIcon(itemCode, boxPx);
         if (icon != null) {

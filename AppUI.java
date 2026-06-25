@@ -71,7 +71,7 @@ public final class AppUI {
 
     /** {@link JLabel#getClientProperty(Object)} — skip automatic foreground theming. */
     public static final String CLIENT_PRESERVE_FOREGROUND = "ims.preserveForeground";
-    /** {@link JComponent#getClientProperty(Object)} value {@code "card"} or {@code "elevated"}. */
+    /** {@link JComponent#getClientProperty(Object)} value {@code "card"}. */
     public static final String CLIENT_SURFACE = "ims.surface";
 
     /** Utility holder for shared UI theme constants and helpers. */
@@ -272,13 +272,6 @@ public final class AppUI {
         component.setBackground(SURFACE);
     }
 
-    /** Marks a panel as a raised inner block ({@link #SURFACE_ELEVATED}). */
-    public static void markElevatedSurface(JComponent component) {
-        component.putClientProperty(CLIENT_SURFACE, "elevated");
-        component.setOpaque(true);
-        component.setBackground(SURFACE_ELEVATED);
-    }
-
     /** Simple 1px outline for tables, scroll panes, and containers (no inner padding). */
     public static Border lineBorder() {
         return BorderFactory.createLineBorder(BORDER);
@@ -437,8 +430,6 @@ public final class AppUI {
             Object surface = jc.getClientProperty(CLIENT_SURFACE);
             if ("card".equals(surface)) {
                 jc.setBackground(SURFACE);
-            } else if ("elevated".equals(surface)) {
-                jc.setBackground(SURFACE_ELEVATED);
             } else {
                 jc.setBackground(BACKGROUND);
             }

@@ -137,8 +137,6 @@ public final class WorkspaceShell {
     static final int PO_CANCEL_REASON_MAX_CHARS = 500;
     static final int ITEM_DESC_COLUMN_MIN_WIDTH = 80;
     static final int ITEM_DESC_COLUMN_MAX_WIDTH = 560;
-    /** Optional centered image on the initial workspace card (PNG/JPG/GIF); omitted when missing. */
-    static final Path WORKSPACE_WELCOME_IMAGE = Paths.get("workspace_welcome.png");
     /** On-disk JPEG per item: {@code item_images/<Item Code>.jpeg}. */
     static final Path ITEM_IMAGES_DIR = Paths.get("item_images");
     /** Max width when downscaling item JPEGs for display (shared by rail, detail, and upload preview). */
@@ -332,7 +330,7 @@ public final class WorkspaceShell {
     /** While the workspace frame is open: recomputes the bottom profit-alert banner from {@code app_metadata}. */
     static volatile Consumer<Connection> profitAlertBannerRefreshAction;
     /** Sidebar card key for the view currently shown in the workspace (persisted on close). */
-    static volatile String activeWorkspaceViewKey = "home";
+    static volatile String activeWorkspaceViewKey = "View Items";
     static final int RECENT_ITEMS_MAX = 10;
     static final Deque<RecentItemEntry> recentItems = new ArrayDeque<>();
     static final List<Runnable> recentItemRefreshers = new ArrayList<>();
@@ -514,30 +512,6 @@ public final class WorkspaceShell {
                     // Ignore intermittent write failures while dragging.
                 }
             });
-        }
-    }
-
-    static void restoreLastWorkspaceView(
-            User user,
-            Connection connection,
-            JFrame frame,
-            JPanel workspaceContainer,
-            AccountActions accountActions
-    ) {
-        try {
-            String last = DatabaseManager.getAppMetadata(connection, DatabaseManager.META_WORKSPACE_LAST_VIEW);
-            if (last == null || last.isBlank() || "home".equals(last) || "Log Out".equals(last)) {
-                return;
-            }
-            for (NavItem item : getItems(user, connection, accountActions, frame, workspaceContainer)) {
-                if (last.equals(item.label) && item.viewBuilder != null) {
-                    showView(workspaceContainer, item.label, item.viewBuilder.build());
-                    return;
-                }
-            }
-        } catch (SQLException ex) {
-            JOptionPane.showMessageDialog(frame, "Could not restore last view: " + ex.getMessage(),
-                    "Workspace", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -1190,7 +1164,6 @@ public final class WorkspaceShell {
 
         JPanel workspaceContainer = new JPanel(new CardLayout());
         AppUI.applyPanelBackground(workspaceContainer);
-        workspaceContainer.add(buildEmptyWorkspaceCanvas(), "home");
 
         JPanel sidebar = buildSidebar(user, frame, workspaceContainer, connection, accountActions);
 
@@ -1364,7 +1337,6 @@ public final class WorkspaceShell {
 
         installDividerPersistence(connection, splitPane, adminMetricsTripleHolder[0], photoSplitHolder[0]);
         installWorkspaceKeyboardShortcuts(frame, root, user, connection, workspaceContainer, accountActions);
-        activeWorkspaceViewKey = "home";
 
         final boolean[] backupPromptHandled = new boolean[]{false};
         frame.addWindowListener(new WindowAdapter() {
@@ -1388,7 +1360,6 @@ public final class WorkspaceShell {
                 activeMetricsStrip = null;
                 adminMetricsRailHost = null;
                 profitAlertBannerRefreshAction = null;
-                activeWorkspaceViewKey = "home";
                 profitBanner.stopTimer();
                 closeConnectionQuietly(connection);
                 if (whenWindowClosed != null) {
@@ -1423,7 +1394,13 @@ public final class WorkspaceShell {
                 syncAdminMetricsSplit(outer);
             }
             syncSidebarWorkspaceSplit(splitPane);
-            restoreLastWorkspaceView(user, connection, frame, workspaceContainer, accountActions);
+            try {
+                showView(workspaceContainer, "View Items",
+                        ViewItemsPanel.build(user, connection, frame, workspaceContainer));
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(frame, "Unable to open View Items: " + ex.getMessage(),
+                        "View Error", JOptionPane.ERROR_MESSAGE);
+            }
         });
     }
 
@@ -1556,31 +1533,6 @@ public final class WorkspaceShell {
         }
         recentBlock.revalidate();
         recentBlock.repaint();
-    }
-
-    /**
-     * Initial workspace card: blank themed canvas so the center feels empty until a function is chosen.
-     * If {@link #WORKSPACE_WELCOME_IMAGE} exists and loads, it is shown centered (e.g. logo); otherwise the panel stays empty.
-     */
-    static JPanel buildEmptyWorkspaceCanvas() {
-        JPanel canvas = new JPanel(new BorderLayout());
-        AppUI.applyPanelBackground(canvas);
-        if (!Files.isReadable(WORKSPACE_WELCOME_IMAGE)) {
-            return canvas;
-        }
-        try {
-            ImageIcon icon = new ImageIcon(WORKSPACE_WELCOME_IMAGE.toAbsolutePath().toString());
-            if (icon.getIconWidth() <= 0) {
-                return canvas;
-            }
-            JLabel picture = new JLabel(icon);
-            picture.setHorizontalAlignment(SwingConstants.CENTER);
-            picture.setVerticalAlignment(SwingConstants.CENTER);
-            canvas.add(picture, BorderLayout.CENTER);
-        } catch (Exception ignored) {
-            // Keep empty canvas on any load failure.
-        }
-        return canvas;
     }
 
     /**
@@ -2154,35 +2106,6 @@ public final class WorkspaceShell {
                     + "<span style='font-size:11px'>item_images/" + itemCode + ".jpeg</span></center></html>");
         }
     }
-    /**
-     * Builds a generic launcher panel for simple one-click actions.
-     *
-     * @param title panel title
-     * @param description supporting text
-     * @param action action to run
-     * @return launcher panel
-     */
-    static JPanel buildLauncherPanel(String title, String description, CheckedAction action) {
-        JPanel panel = buildFormPanel(title);
-        JPanel content = buildSectionPanel();
-
-        JLabel heading = buildSectionTitle(title);
-        JLabel desc = buildSectionText(description);
-
-        JButton runButton = new JButton("Run " + title);
-        AppUI.stylePrimaryButton(runButton);
-        runButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-        runButton.addActionListener(e -> new Thread(() -> runAction(action), "ims-runner").start());
-
-        content.add(heading);
-        content.add(Box.createVerticalStrut(8));
-        content.add(desc);
-        content.add(Box.createVerticalStrut(14));
-        content.add(runButton);
-        panel.add(content, BorderLayout.NORTH);
-        return panel;
-    }
-
     /** Ensures {@link #ITEM_IMAGES_DIR} exists on disk (no-op when already present). */
     static void ensureItemImagesDir() throws IOException {
         Files.createDirectories(ITEM_IMAGES_DIR);

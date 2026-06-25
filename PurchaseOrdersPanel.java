@@ -1,90 +1,34 @@
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
-import java.awt.Color;
 import java.awt.Component;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.Window;
-import java.awt.event.FocusAdapter;
-import java.awt.event.FocusEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
-import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.regex.Pattern;
-import javax.swing.BorderFactory;
-import javax.swing.Box;
-import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
-import javax.swing.JComponent;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPasswordField;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
 import javax.swing.JTable;
-import javax.swing.JTextArea;
 import javax.swing.JTextField;
-import javax.swing.RowFilter;
-import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.Timer;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableColumn;
-import javax.swing.table.TableModel;
-import javax.swing.table.TableRowSorter;
 
-
-/** Extracted from WorkspaceShell. */
 public final class PurchaseOrdersPanel {
     private PurchaseOrdersPanel() {}
 
-        /**
+    /**
      * Builds purchase order create-and-review panel.
      *
      * @param user active signed-in user
@@ -408,33 +352,12 @@ public final class PurchaseOrdersPanel {
         return panel;
     }
 
-        /** Builds the pending orders table view panel. */
-    public static JPanel buildPendingOrdersPanel(Connection connection) throws SQLException {
-        return WorkspaceShell.buildFilterableTablePanel(
-                "Pending Orders",
-                new String[]{"Item Code", "Item Description", "Amount", "Purchase Price", "Remaining Payment", "Purchased From", "Reference", "Date"},
-                """
-                SELECT po.`Item Code`,
-                       COALESCE(inv.`Item Name`, '') AS `Item Description`,
-                       po.`Amount`,
-                       po.`Purchase Price`,
-                       po.`Remaining Payment`,
-                       po.`Purchased From`,
-                       po.`Reference`,
-                       po.`Date`
-                FROM pendingOrders po
-                LEFT JOIN inventory inv ON inv.`Item Code` = po.`Item Code`
-                """,
-                connection
-        );
-    }
-
-        /** Table model column titles for pending lines; column 0 is SQLite {@code rowid} (shown with zero-width header). */
+    /** Table model column titles for pending lines; column 0 is SQLite {@code rowid} (shown with zero-width header). */
     static final String[] PENDING_ORDER_TABLE_COLUMNS = new String[]{
             "\u200B", "Item Code", "Item Description", "Amount", "Purchase Price", "Remaining Payment", "Purchased From", "Reference", "Date"
     };
 
-        /** Narrow/hide SQLite rowid column (index 0) on embedded pending-order tables. */
+    /** Narrow/hide SQLite rowid column (index 0) on embedded pending-order tables. */
     static void hidePendingOrdersRowIdColumn(JTable pendingTable) {
         TableColumn col = pendingTable.getColumnModel().getColumn(0);
         col.setMinWidth(0);
@@ -443,7 +366,7 @@ public final class PurchaseOrdersPanel {
         col.setResizable(false);
     }
 
-        /** Loads pending order lines into the supplied table model ({@link #PENDING_ORDER_TABLE_COLUMNS} including SQLite rowid). */
+    /** Loads pending order lines into the supplied table model ({@link #PENDING_ORDER_TABLE_COLUMNS} including SQLite rowid). */
     static void loadPendingOrders(DefaultTableModel model, Connection connection) throws SQLException {
         model.setRowCount(0);
         String sql = """
@@ -478,7 +401,7 @@ public final class PurchaseOrdersPanel {
         }
     }
 
-        /**
+    /**
      * Removes one open pending-order line by {@code pendingOrders.rowid}, restores {@code On Order}, writes a cancellation movement.
      *
      * @param reason nullable or blank; shortened to {@link #WorkspaceShell.PO_CANCEL_REASON_MAX_CHARS}
@@ -557,7 +480,7 @@ public final class PurchaseOrdersPanel {
         }
     }
 
-        /** Confirms cancellation, prompts for optional reason, runs {@link #applyPendingOrderCancellation}, reloads pending table. */
+    /** Confirms cancellation, prompts for optional reason, runs {@link #applyPendingOrderCancellation}, reloads pending table. */
     static void cancelSelectedPendingOrderLineDialog(
             User user,
             Connection connection,

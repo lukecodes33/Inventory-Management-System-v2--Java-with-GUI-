@@ -321,57 +321,6 @@ public final class InventoryFifo {
     }
 
     /**
-     * On-hand SKUs ranked by unrealized gain percent: {@code (market − weighted FIFO avg unit cost) / avg unit cost × 100}.
-     * Excludes null market price, zero stock, or non-positive average layer cost.
-     *
-     * @param connection open JDBC session
-     * @param limit      max rows (clamped 1–50)
-     * @return descending by gain percent
-     * @throws SQLException when the query fails
-     */
-    public static List<UnrealizedGainRow> topUnrealizedGainPercentOnHand(Connection connection, int limit)
-            throws SQLException {
-        if (limit < 1) {
-            return Collections.emptyList();
-        }
-        int cap = Math.min(50, limit);
-        String sql = """
-                SELECT icode,
-                       ((mp - avgcost) / avgcost) * 100.0 AS gpct
-                FROM (
-                    SELECT i.`Item Code` AS icode,
-                           CAST(i.`Market Price` AS REAL) AS mp,
-                           (CAST(layer_tot.w AS REAL) / layer_tot.r) AS avgcost
-                    FROM inventory i
-                    INNER JOIN (
-                        SELECT item_code AS icode,
-                               SUM(CAST(qty_remaining AS REAL) * unit_cost) AS w,
-                               SUM(qty_remaining) AS r
-                        FROM inventory_cost_layers
-                        WHERE qty_remaining > 0
-                        GROUP BY item_code
-                    ) layer_tot ON layer_tot.icode = i.`Item Code`
-                    WHERE i.`Stock` > 0
-                      AND i.`Market Price` IS NOT NULL
-                      AND layer_tot.r > 0
-                      AND (CAST(layer_tot.w AS REAL) / layer_tot.r) > 1e-12
-                ) x
-                ORDER BY gpct DESC
-                LIMIT ?
-                """;
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setInt(1, cap);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<UnrealizedGainRow> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(new UnrealizedGainRow(rs.getString("icode"), rs.getDouble("gpct")));
-                }
-                return out;
-            }
-        }
-    }
-
-    /**
      * Weighted-average FIFO unit cost for remaining on-hand layers of one SKU.
      *
      * @return average unit cost, or {@code null} when no positive remaining quantity
@@ -399,18 +348,6 @@ public final class InventoryFifo {
                 }
                 return w / r;
             }
-        }
-    }
-
-    /** One SKU line ranked by unrealized gain vs weighted-average FIFO unit cost and market price. */
-    public static final class UnrealizedGainRow {
-        public final String itemCode;
-        /** Percent gain of market over average unit cost (may be negative). */
-        public final double gainPercent;
-
-        public UnrealizedGainRow(String itemCode, double gainPercent) {
-            this.itemCode = itemCode;
-            this.gainPercent = gainPercent;
         }
     }
 

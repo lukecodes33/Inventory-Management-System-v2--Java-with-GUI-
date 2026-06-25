@@ -1,90 +1,42 @@
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
-import java.awt.Color;
 import java.awt.Component;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.Window;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
-import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPasswordField;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
-import javax.swing.RowFilter;
-import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
-import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import javax.swing.table.DefaultTableModel;
-import javax.swing.table.TableColumn;
-import javax.swing.table.TableModel;
-import javax.swing.table.TableRowSorter;
 
-
-/** Extracted from WorkspaceShell. */
 public final class PricingReorderPanel {
     private PricingReorderPanel() {}
 
-        /** Bold SKU code with a wrapping name region so labels are not abbreviated to tiny fragments. */
+    /** Bold SKU code with a wrapping name region so labels are not abbreviated to tiny fragments. */
     static final int BULK_EDIT_META_VGAP = 2;
 
         static JLabel bulkEditSkuCodeLabel(String code) {
@@ -109,7 +61,7 @@ public final class PricingReorderPanel {
         return nameArea;
     }
 
-        /** Tweaks preferred width while typing so compact numeric editors grow within bounds. */
+    /** Tweaks preferred width while typing so compact numeric editors grow within bounds. */
     static void attachAdaptiveBoundedFieldWidth(JTextField field, int heightPx, int minWidthPx, int maxWidthPx) {
         Runnable sync = () -> {
             FontMetrics fm = field.getFontMetrics(field.getFont());
@@ -145,7 +97,7 @@ public final class PricingReorderPanel {
         sync.run();
     }
 
-        /** Select entire field on focus so typing replaces the loaded value instead of appending. */
+    /** Select entire field on focus so typing replaces the loaded value instead of appending. */
     static void attachSelectAllOnFocus(JTextField field) {
         field.addFocusListener(new FocusAdapter() {
             @Override
@@ -159,7 +111,7 @@ public final class PricingReorderPanel {
 
         static final int BULK_EDIT_FIELD_COL_WIDTH = 108;
 
-        /** Compact input column aligned under header labels. */
+    /** Compact input column aligned under header labels. */
     static JPanel buildBulkEditFieldColumn(JTextField field, int minFieldW, int maxFieldW) {
         JPanel col = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         col.setOpaque(false);
@@ -171,7 +123,7 @@ public final class PricingReorderPanel {
         return col;
     }
 
-        /** Small left-aligned muted column header that lines up over its item-row column. */
+    /** Small left-aligned muted column header that lines up over its item-row column. */
     static JLabel bulkEditColumnHeader(String text) {
         JLabel label = new JLabel(text);
         label.setForeground(AppUI.TEXT_MUTED);
@@ -179,7 +131,7 @@ public final class PricingReorderPanel {
         return label;
     }
 
-        /** Column headers left-aligned over the item, market-price, and reorder columns below. */
+    /** Column headers left-aligned over the item, market-price, and reorder columns below. */
     static JPanel buildPricingReorderHeaderRow() {
         JPanel row = new JPanel(new GridBagLayout());
         row.setOpaque(false);
@@ -212,7 +164,7 @@ public final class PricingReorderPanel {
         return row;
     }
 
-        /** One inventory row: SKU code on top, name + input fields aligned on the row below. */
+    /** One inventory row: SKU code on top, name + input fields aligned on the row below. */
     static JPanel buildPricingReorderItemRow(
             String code,
             String name,
@@ -250,13 +202,13 @@ public final class PricingReorderPanel {
         return row;
     }
 
-        /** Locks a stacked-list row to its preferred height so BoxLayout cannot stretch gaps when the window is tall. */
+    /** Locks a stacked-list row to its preferred height so BoxLayout cannot stretch gaps when the window is tall. */
     static void capRowHeight(JComponent row) {
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
     }
 
-        /**
+    /**
      * Bulk-edit market price and reorder trigger on one screen — both fields sit on the same row per SKU.
      * Submit applies only rows where a value actually changed.
      */

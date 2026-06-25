@@ -6,12 +6,9 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Inventory change audit log and stock adjustments (separate from write-offs and sales).
- */
+/** Inventory change audit log (separate from write-offs and sales). */
 public final class InventoryAudit {
 
-    public static final String CHANGE_STOCK_ADJUST = "STOCK_ADJUST";
     public static final String CHANGE_MARKET_PRICE = "MARKET_PRICE";
     public static final String CHANGE_NOTE = "NOTE";
 
@@ -103,89 +100,6 @@ public final class InventoryAudit {
             String details,
             String createdAt
     ) {
-    }
-
-    /**
-     * Adjusts stock by {@code delta} (positive adds a FIFO layer at {@code unitCost}; negative consumes FIFO).
-     */
-    public static void applyStockAdjustment(
-            Connection connection,
-            String username,
-            String itemCode,
-            int delta,
-            double unitCost,
-            String reason,
-            String note
-    ) throws SQLException {
-        if (itemCode == null || itemCode.isBlank()) {
-            throw new SQLException("Item code is required.");
-        }
-        if (delta == 0) {
-            throw new SQLException("Adjustment quantity cannot be zero.");
-        }
-        String code = itemCode.trim();
-        String now = dateTime.nowDisplayString();
-        boolean savedAc = connection.getAutoCommit();
-        connection.setAutoCommit(false);
-        try {
-            if (delta > 0) {
-                if (unitCost < 0) {
-                    throw new SQLException("Unit cost must be zero or greater for stock increases.");
-                }
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "UPDATE inventory SET Stock = Stock + ? WHERE `Item Code` = ?")) {
-                    ps.setInt(1, delta);
-                    ps.setString(2, code);
-                    if (ps.executeUpdate() == 0) {
-                        throw new SQLException("Item code not found.");
-                    }
-                }
-                try (PreparedStatement layer = connection.prepareStatement(
-                        """
-                        INSERT INTO inventory_cost_layers
-                            (item_code, reference, unit_cost, qty_received, qty_remaining, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """)) {
-                    layer.setString(1, code);
-                    layer.setString(2, "ADJUST");
-                    layer.setDouble(3, unitCost);
-                    layer.setInt(4, delta);
-                    layer.setInt(5, delta);
-                    layer.setString(6, now);
-                    layer.executeUpdate();
-                }
-            } else {
-                int remove = -delta;
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "UPDATE inventory SET Stock = Stock - ? WHERE `Item Code` = ? AND Stock >= ?")) {
-                    ps.setInt(1, remove);
-                    ps.setString(2, code);
-                    ps.setInt(3, remove);
-                    if (ps.executeUpdate() == 0) {
-                        throw new SQLException("Insufficient stock for adjustment.");
-                    }
-                }
-                InventoryFifo.consumeFifoCost(connection, code, remove);
-            }
-            try (PreparedStatement movement = connection.prepareStatement(
-                    "INSERT INTO movements (`Item`, `Amount`, `Type`, `Reason`, `User`, `Date`) VALUES (?, ?, ?, ?, ?, ?)")) {
-                movement.setString(1, code);
-                movement.setString(2, String.valueOf(Math.abs(delta)));
-                movement.setString(3, delta > 0 ? "ADJUST IN" : "ADJUST OUT");
-                movement.setString(4, reason == null ? "" : reason);
-                movement.setString(5, username);
-                movement.setString(6, now);
-                movement.executeUpdate();
-            }
-            String detail = note == null || note.isBlank() ? null : note.trim();
-            logChange(connection, username, code, CHANGE_STOCK_ADJUST, delta, reason, detail);
-            connection.commit();
-        } catch (SQLException ex) {
-            connection.rollback();
-            throw ex;
-        } finally {
-            connection.setAutoCommit(savedAc);
-        }
     }
 
     public static void touchMarketPriceUpdated(Connection connection, String itemCode) throws SQLException {
